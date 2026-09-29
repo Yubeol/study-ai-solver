@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: SecretStr = SecretStr("")
 
+    # 업로드
+    max_upload_mb: int = Field(default=20, gt=0)
+
     @field_validator("db_schema", "db_app_schema")
     @classmethod
     def _check_schema_name(cls, v: str) -> str:

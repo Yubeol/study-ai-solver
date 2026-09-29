@@ -11,6 +11,10 @@
   - 마이그레이션 001(mingyu 보완: 컬럼/인덱스 추가만), 002(mingyu_app 스키마 + 테이블 6개) 공유 DB에 적용 완료, 재실행 시 변경 없음 확인
   - FastAPI 골격(/health, /health/db), .env 설정 로딩(pydantic-settings), psycopg 풀, scoped_transaction(SET LOCAL)
   - 테스트 18개 통과 (설정 검증, 스키마 존재, search_path 고정·원복, 마이그레이션 체크섬, API)
+- 업로드·처리 파이프라인 뼈대 완료 (2026-09-29)
+  - 과목/자료 API(`/subjects`, `/books`), 이미지 다중 업로드(`POST /books/{id}/pages`), 처리 상태 조회(`/books/{id}/pages`, `/processing-runs/{id}`)
+  - 저장소 모듈(local 구현, s3 자리만), BackgroundTasks 파이프라인(단계별 상태 갱신, D-012). 단계 함수는 빈 함수
+  - 테스트 35개 통과 (저장소·한글 경로, 업로드→EMBEDDED, 검증 실패 시 미저장, REVIEW_REQUIRED/PARTIAL, FAILED). 테스트가 만든 DB 행은 자동 삭제
 
 ## 다음 작업
 1. Jev 확인 (사용자가 직접)
@@ -20,12 +24,18 @@
    - 결과(성공/결제 필요 에러)를 DECISIONS D-007에 기록
 2. S3: 팀 버킷 유무 문의. 없으면 STORAGE_BACKEND=local로 진행
 3. ~~기반 작업~~ (완료)
-4. 업로드 API + 백그라운드 처리 파이프라인
+4. 처리 단계 구현 (한 세션에 하나씩, `backend/app/ingestion/stages.py`)
+   - 4-1. extract_text: 인쇄체 PaddleOCR → theory 원문 추출 (다음 세션)
+   - 4-2. detect_visuals: 기울기 보정, 시각자료 crop, 표 구조화
+   - 4-3. chunk_theory: 청킹(sort_order), 수식, 제외 영역, 품질 판정(NeedsReview)
+   - 4-4. embed: 시각자료 설명문(Gemini) + BGE-M3 임베딩
+5. 재처리 API (FAILED/REVIEW_REQUIRED/중단된 페이지 다시 돌리기), 자료 삭제 시 저장 파일 정리
 
 ## 막힌 것 / 확인 필요
 - S3 사용 가능 여부 미확인 (pages.source_s3_uri, visual_assets.crop_s3_uri가 NOT NULL)
 - Jev Cloudflare 경로의 무료 할당량 적용 여부 미확인
 - gemini-3.7-flash는 503(일시적 과부하)만 확인, 정상 응답은 아직 못 받음
+- 서버 재시작 시 진행 중이던 BackgroundTasks는 사라진다(페이지가 중간 상태로 남음) → 5번 재처리 API로 보완
 - 테스트 시 경고: starlette TestClient가 httpx 대신 httpx2 사용을 권고(동작 문제 없음, 추후 교체 검토)
 
 ## 참고: 로컬 확인 방법 (Windows PowerShell)
@@ -46,3 +56,4 @@
 ## 완료 기록
 - 2026-09-29: 저장소 초기 구조, uv 환경, GitHub 연결, 운영 문서 5종, Gemini 모델 확인
 - 2026-09-29: 기반 작업 — 마이그레이션 001/002 적용, FastAPI 골격, 설정 로딩, DB 연결, 스키마 고정 테스트
+- 2026-09-29: 업로드·처리 파이프라인 뼈대 — books/업로드/상태 API, local 저장소, 단계별 상태 갱신 골격

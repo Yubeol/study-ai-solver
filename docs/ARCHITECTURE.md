@@ -9,17 +9,27 @@ adsp-study-rag/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py        # FastAPI 앱 (lifespan에서 커넥션 풀 열고 닫음)
-│   │   ├── api/           # 라우터 (health)
+│   │   ├── api/           # 라우터: health, books(과목·자료·업로드), runs(처리 상태), deps
 │   │   ├── core/config.py # .env 설정 (pydantic-settings, 스키마 이름 검증)
-│   │   └── db/            # connection.py(풀, scoped_transaction), migrate.py(마이그레이션 실행기)
-│   │   # 이후 추가 예정: ingestion, retrieval, judge, llm, storage
+│   │   ├── db/            # connection.py(풀, scoped_transaction), migrate.py(마이그레이션 실행기)
+│   │   ├── repositories/  # books / pages / runs SQL (스키마는 Identifier로 명시)
+│   │   ├── storage/       # Storage 인터페이스, local(구현), s3(자리만), get_storage()
+│   │   └── ingestion/     # images(업로드 검증), pipeline(단계 실행·상태 갱신), stages(단계 함수, 현재 빈 함수)
+│   │   # 이후 추가 예정: retrieval, judge, llm
 │   ├── migrations/   # 번호 붙은 SQL 파일 (DDL 변경 이력)
 │   └── tests/        # DB 테스트는 접속 불가 시 skip
 ├── frontend/         # React + Vite (미생성)
 ├── docs/
 └── data/             # 로컬 이미지/산출물 (gitignore)
 ```
-- 실행: `cd backend; uv run uvicorn app.main:app --reload` → `/health`, `/health/db`
+- 실행: `cd backend; uv run uvicorn app.main:app --reload` → `/health`, `/health/db`, `/docs`
+
+## API (현재)
+- `GET /subjects`: books.subject 고유값
+- `POST /books` {title, subject, material_type, edition?, source_name?} / `GET /books?subject=` / `GET /books/{id}` (page_count, status_counts 포함)
+- `POST /books/{id}/pages` (multipart `files` 여러 장, PNG/JPEG/WEBP, 장당 `MAX_UPLOAD_MB`) → 202 {run_id, pages}. 전부 검증 후 저장, 한 장이라도 실패하면 아무것도 저장하지 않음
+- `GET /books/{id}/pages`, `GET /processing-runs/{run_id}` (run 요약 + 페이지별 상태·현재 단계·오류)
+- 응답에서 저장소 URI(source_s3_uri)는 뺀다.
 - 테스트: 루트에서 `uv run pytest`
 
 ## DB 접근 규칙 (구현)
@@ -63,7 +73,19 @@ adsp-study-rag/
 - 요약 로그는 팀 규격 query_logs에도 기록한다.
 
 ## 자료 적재 흐름 (업로드 → 백그라운드 처리)
-업로드 API가 파일을 저장소(local 또는 S3)에 저장하고 books/pages를 만든 뒤 백그라운드 작업을 시작한다. 각 단계에서 pages.processing_status를 갱신해 화면에 처리 상태를 보여준다.
+업로드 API가 파일을 저장소(local 또는 S3)에 저장하고 pages 행과 processing_runs 1건을 만든 뒤 백그라운드 작업(FastAPI BackgroundTasks)을 시작한다.
+
+### 구현 상태 (뼈대, 2026-09-29)
+- 저장: `local://books/{book_id}/{page_id}.{ext}` (LOCAL_STORAGE_DIR 기준). 원본 바이트 그대로, 원본 파일명은 page_metadata.original_filename
+- 페이지 순서: page_metadata.upload_index (book 단위로 이어 붙임)
+- 단계와 상태 매핑 (D-012): extract_text → EXTRACTED / detect_visuals, chunk_theory → VERIFIED / embed → EMBEDDED
+  - 단계가 `NeedsReview`를 던지면 REVIEW_REQUIRED(review_required=true) 후 그 페이지 중단, 그 밖의 예외는 FAILED
+  - 현재 단계·오류·사유·갱신 시각은 page_metadata.pipeline에 기록
+  - run 집계: 전부 성공 SUCCESS / 전부 실패 FAILED / 그 외 PARTIAL
+- 단계 함수(`ingestion/stages.py`)는 현재 모두 빈 함수 → 업로드하면 바로 EMBEDDED까지 간다. 아래 1~5를 하나씩 채운다.
+- 단계 목록은 `app.state.pipeline_stages`로 주입(테스트에서 가짜 단계 사용)
+
+### 목표 단계
 1. 텍스트 추출: 교재·강의노트(인쇄체) → PaddleOCR / 개인노트(손필기) → 비전 LLM
 2. 기울기 보정, 시각자료 자동 crop(OpenCV/Pillow), 세트 그림 묶기(visual_groups), 표 구조화
 3. 이론 청킹(sort_order 부여), 수식 구조화, 제외 영역(예제/기출/코드) 분리
