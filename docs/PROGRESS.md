@@ -1,26 +1,39 @@
 # PROGRESS
 
 ## 현재 상태 (2026-09-29)
-- 1단계 완료: 저장소, uv 환경(Python 3.12 고정), .gitignore, GitHub 원격(study-ai-solver, private)
-- 2단계 진행 중: .env / 운영 문서 5종 작성
+- 1단계 완료: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12 고정), .gitignore, GitHub 원격(Yubeol/study-ai-solver, private, main)
+- 2단계 완료: .env / .env.example, CLAUDE.md, docs 4종
+- 3단계 진행 중: 외부 접근 확인
+  - Gemini: 완료. LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정 (DECISIONS D-006)
+  - Jev: 미확인
+  - S3: 미확인 (팀원에게 문의 필요)
 
 ## 다음 작업
-1. 외부 접근 확인
-   - Gemini 키로 gemini-2.5-flash-lite / gemini-2.5-flash 호출 가능한지 (막히면 3.1 Flash-Lite로 변경)
-   - Jev: typesafe.ai 대기자 명단 신청, Cloudflare 계정 생성 후 typesafe/jev 무료 호출 가능 여부
-   - S3: 팀 버킷 유무와 접근 방법 (없으면 STORAGE_BACKEND=local로 시작)
-2. Claude Code 첫 세션: mingyu 스키마 보완 마이그레이션 + mingyu_app 생성 + FastAPI 골격 + DB 연결 테스트
-3. 업로드 API + 백그라운드 처리 파이프라인
+1. Jev 확인 (사용자가 직접)
+   - typesafe.ai 얼리 액세스 대기자 명단 신청
+   - Cloudflare 무료 계정 + Workers AI 토큰 생성 → .env에 CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
+   - REST로 typesafe/jev 호출 테스트: POST https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run, body {"model":"typesafe/jev","input":{"state":..., "questions":{...}}}
+   - 결과(성공/결제 필요 에러)를 DECISIONS D-007에 기록
+2. S3: 팀 버킷 유무 문의. 없으면 STORAGE_BACKEND=local로 진행
+3. Claude Code 첫 세션: 기반 작업
+   - mingyu 스키마 보완 마이그레이션 (ARCHITECTURE "mingyu 스키마 보완" 참고, 추가만)
+   - mingyu_app 스키마 + 테이블 생성 마이그레이션
+   - FastAPI 골격 + 설정(.env 로딩) + DB 연결 + 스키마 고정 확인 테스트
+4. 업로드 API + 백그라운드 처리 파이프라인
 
 ## 막힌 것 / 확인 필요
 - S3 사용 가능 여부 미확인 (pages.source_s3_uri, visual_assets.crop_s3_uri가 NOT NULL)
-- Gemini 2.5 신규 키 접근 가능 여부 미확인
 - Jev Cloudflare 경로의 무료 할당량 적용 여부 미확인
+- gemini-3.7-flash는 503(일시적 과부하)만 확인, 정상 응답은 아직 못 받음
+
+## 참고: 로컬 확인 방법 (Windows PowerShell)
+- Gemini 호출 테스트는 헤더에 Content-Type을 넣지 말고 -ContentType 옵션을 쓴다 (PowerShell 5.1 이슈).
+- 모델 목록에 보여도 호출이 막힐 수 있으므로 실제 generateContent 호출로 판단한다.
 
 ## 일정
 - 1주차 (09-29 ~ 10-04): 기반 + 업로드/처리 파이프라인(텍스트, 시각자료, 임베딩) + 검색 품질 확인
 - 2주차 (10-05 ~ 10-11): 질의 흐름(판정, 제약 프리셋, 근거 표시) + 문제 사진 입력 + 화면 3개 + 실사용
-- 여유분 (10-12 ~ 10-15), Gemini 2.5 종료(10-16) 전 완료
+- 여유분 (10-12 ~ 10-15)
 
 ## 자체 평가 메모 (과제 성공 기준용, 실사용하며 기록)
 - 실용성:
@@ -29,4 +42,4 @@
 - 단점:
 
 ## 완료 기록
-- 2026-09-29: 저장소 초기 구조, uv 환경, GitHub 연결
+- 2026-09-29: 저장소 초기 구조, uv 환경, GitHub 연결, 운영 문서 5종, Gemini 모델 확인
