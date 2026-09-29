@@ -1,35 +1,39 @@
 # PROGRESS
 
-## 현재 상태 (2026-09-29)
-- 1단계 완료: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12 고정), .gitignore, GitHub 원격(Yubeol/study-ai-solver, private, main)
-- 2단계 완료: .env / .env.example, CLAUDE.md, docs 4종
-- 3단계 진행 중: 외부 접근 확인
-  - Gemini: 완료. LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정 (DECISIONS D-006)
-  - Jev: 미확인
-  - S3: 미확인 (팀원에게 문의 필요)
-- 기반 작업 완료 (2026-09-29)
-  - 마이그레이션 001(mingyu 보완: 컬럼/인덱스 추가만), 002(mingyu_app 스키마 + 테이블 6개) 공유 DB에 적용 완료, 재실행 시 변경 없음 확인
-  - FastAPI 골격(/health, /health/db), .env 설정 로딩(pydantic-settings), psycopg 풀, scoped_transaction(SET LOCAL)
-  - 테스트 18개 통과 (설정 검증, 스키마 존재, search_path 고정·원복, 마이그레이션 체크섬, API)
-- 업로드·처리 파이프라인 뼈대 완료 (2026-09-29)
-  - 과목/자료 API(`/subjects`, `/books`), 이미지 다중 업로드(`POST /books/{id}/pages`), 처리 상태 조회(`/books/{id}/pages`, `/processing-runs/{id}`)
-  - 저장소 모듈(local 구현, s3 자리만), BackgroundTasks 파이프라인(단계별 상태 갱신, D-012). 단계 함수는 빈 함수
-  - 테스트 35개 통과 (저장소·한글 경로, 업로드→EMBEDDED, 검증 실패 시 미저장, REVIEW_REQUIRED/PARTIAL, FAILED). 테스트가 만든 DB 행은 자동 삭제
+## 현재 상태 (2026-09-29 세션 종료 기준)
+- 환경·문서: 저장소(E:\자료실dsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
+- 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev는 사용자가 나중에 직접 확인. S3 미확인 → 당분간 STORAGE_BACKEND=local
+- DB: 마이그레이션 001(mingyu 보완), 002(mingyu_app 6개 테이블) 적용 완료. 이번 세션에서 DDL 변경 없음
+- 백엔드 (FastAPI, `cd backend; uv run uvicorn app.main:app --reload`, 문서는 /docs)
+  - /health, /health/db
+  - 과목/자료: `GET /subjects`, `POST /books`, `GET /books?subject=`, `GET /books/{id}`
+  - 업로드: `POST /books/{id}/pages` (multipart `files`, PNG/JPEG/WEBP, 장당 MAX_UPLOAD_MB) → 202 {run_id, pages}
+  - 상태: `GET /books/{id}/pages`, `GET /processing-runs/{run_id}`
+  - 저장소 모듈(`app/storage`, local 구현, s3는 NotImplementedError), 파이프라인(`app/ingestion/pipeline.py`, 상태 매핑 D-012)
+  - **처리 단계 4개(`app/ingestion/stages.py`)는 모두 빈 함수** → 지금은 업로드하면 페이지가 바로 EMBEDDED로 표시됨(실제 처리 없음)
+- 테스트: `uv run pytest` 35개 통과(DB 테스트는 테스트 데이터 자동 삭제, 접속 불가 시 skip). 공유 DB의 mingyu books/pages/processing_runs는 현재 0행
+- 프론트엔드: 미생성
 
 ## 다음 작업
-1. Jev 확인 (사용자가 직접)
-   - typesafe.ai 얼리 액세스 대기자 명단 신청
-   - Cloudflare 무료 계정 + Workers AI 토큰 생성 → .env에 CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
-   - REST로 typesafe/jev 호출 테스트: POST https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run, body {"model":"typesafe/jev","input":{"state":..., "questions":{...}}}
-   - 결과(성공/결제 필요 에러)를 DECISIONS D-007에 기록
-2. S3: 팀 버킷 유무 문의. 없으면 STORAGE_BACKEND=local로 진행
-3. ~~기반 작업~~ (완료)
-4. 처리 단계 구현 (한 세션에 하나씩, `backend/app/ingestion/stages.py`)
-   - 4-1. extract_text: 인쇄체 PaddleOCR → theory 원문 추출 (다음 세션)
-   - 4-2. detect_visuals: 기울기 보정, 시각자료 crop, 표 구조화
-   - 4-3. chunk_theory: 청킹(sort_order), 수식, 제외 영역, 품질 판정(NeedsReview)
-   - 4-4. embed: 시각자료 설명문(Gemini) + BGE-M3 임베딩
-5. 재처리 API (FAILED/REVIEW_REQUIRED/중단된 페이지 다시 돌리기), 자료 삭제 시 저장 파일 정리
+1. **[다음 세션] 4-1. extract_text 구현 — 인쇄체(textbook/lecture_note) PaddleOCR**
+   - 할 일
+     1. PaddleOCR 설치 가능 여부를 공식 문서로 확인(Windows + Python 3.12 + CPU, 한국어 모델). 버전·설치 명령·확인 날짜·출처 URL을 DECISIONS에 기록 후 `uv add`. 추측 금지
+     2. `stages.extract_text(ctx)`: `ctx.read_source()` 바이트 → `np.frombuffer` + `cv2.imdecode`(cv2.imread 금지) → OCR → 줄 단위 결과(text, bbox, confidence)
+     3. OCR 결과 저장 위치 결정: 추천은 저장소 JSON(`books/{book_id}/{page_id}.ocr.json`, `ctx.storage.save`) + page_metadata에는 요약(줄 수, 평균 신뢰도, 엔진·버전)만. theory_chunks는 clean_text·embedding_text가 NOT NULL이라 4-3 청킹 단계에서 만든다
+     4. 자료 유형 분기: 책의 material_type이 personal_note면 이번에는 NotImplemented 대신 NeedsReview("손필기 추출 미구현")로 처리(D-008, 비전 LLM은 별도 세션)
+     5. OCR 모델은 프로세스당 1회 로드(지연 로딩 + 캐시). 모델 경로/언어 등은 .env 설정값으로
+   - 관련 파일: `backend/app/ingestion/stages.py`, `pipeline.py`, `app/storage/`, `app/core/config.py`, `.env.example`, `backend/tests/test_ingestion_api.py`(가짜 단계 주입 방식 참고)
+   - 주의
+     - raw_text는 교재 원문 그대로. OCR 결과를 일반 지식으로 교정하지 않는다
+     - 교재 이미지는 `data/`에만 둔다. 테스트용 이미지는 코드로 생성(Pillow로 글자 그리기)하고 저장소에 커밋하지 않는다
+     - OCR 실제 모델 테스트는 느리므로 mark를 달아 기본 테스트와 분리 검토
+     - BackgroundTasks는 스레드풀에서 돌므로 OCR 객체의 스레드 안전성 확인
+2. 4-2. detect_visuals: 기울기 보정, 시각자료 crop(visual_assets.crop_s3_uri NOT NULL → 저장소 URI), 세트 그림, 표 구조화
+3. 4-3. chunk_theory: 청킹(sort_order), 수식, 제외 영역(excluded_sections), 품질 판정(`NeedsReview`) → theory_chunks 적재
+4. 4-4. embed: 시각자료 설명문(Gemini, 재시도·폴백 D-010) + BGE-M3 임베딩
+5. 재처리 API(FAILED/REVIEW_REQUIRED/서버 재시작으로 중단된 페이지), 자료 삭제 시 저장 파일 정리
+6. (사용자) Jev 확인: Cloudflare Workers AI 토큰 → typesafe/jev REST 호출 테스트 → D-007에 기록
+7. (사용자) S3: 팀 버킷 유무 문의
 
 ## 막힌 것 / 확인 필요
 - S3 사용 가능 여부 미확인 (pages.source_s3_uri, visual_assets.crop_s3_uri가 NOT NULL)
@@ -56,4 +60,4 @@
 ## 완료 기록
 - 2026-09-29: 저장소 초기 구조, uv 환경, GitHub 연결, 운영 문서 5종, Gemini 모델 확인
 - 2026-09-29: 기반 작업 — 마이그레이션 001/002 적용, FastAPI 골격, 설정 로딩, DB 연결, 스키마 고정 테스트
-- 2026-09-29: 업로드·처리 파이프라인 뼈대 — books/업로드/상태 API, local 저장소, 단계별 상태 갱신 골격
+- 2026-09-29: 업로드·처리 파이프라인 뼈대 — books/업로드/상태 API, local 저장소, 단계별 상태 갱신 골격 (테스트 35개 통과, push 완료)
