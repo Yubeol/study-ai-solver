@@ -18,10 +18,14 @@
 ## D-005 Python 환경: 루트 pyproject + uv, Python 3.12 고정 (2026-09-29)
 PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열 설치 문제를 피하려고 requires-python ">=3.12,<3.13".
 
-## D-006 Vision/LLM은 Gemini 2.5 Flash-Lite(기본) + 2.5 Flash(재처리) (2026-09-29)
-- 확인 사항: Gemini Developer API에서 gemini-2.5-flash-lite, gemini-2.5-flash는 2026-10-16 종료 예정. Google은 2.5 접근을 기존 사용자로 제한하고 신규 프로젝트에 3.5 Flash-Lite / 3.8 Flash를 권장.
-  - 출처: https://firebase.google.com/docs/ai-logic/models , https://ai.google.dev/gemini-api/docs/deprecations
-- 결정: 프로젝트 기간(~10-15)이 종료 전이라 2.5를 사용. 모델명은 .env 설정값으로 두어 교체 가능하게 한다. 신규 키로 접근이 막히면 3.1 Flash-Lite로 바꾼다.
+## D-006 Vision/LLM은 Gemini 3.5 Flash-Lite(기본) + 3.7 Flash(재처리, 잠정) (2026-09-29)
+- 처음 계획은 2.5 Flash-Lite / 2.5 Flash였으나 신규 무료 키로 호출 시 404. 모델 목록에는 보이지만 호출은 막힘.
+  - Google 공지: 2.5 모델 접근을 기존 사용자로 제한, 신규 프로젝트는 3.5 Flash-Lite / 3.8 Flash 권장. 2.5는 2026-10-16 종료 예정.
+  - 출처: https://ai.google.dev/gemini-api/docs/deprecations , https://firebase.google.com/docs/ai-logic/models
+- 실제 호출 결과 (무료 키, 2026-09-29):
+  - gemini-3.5-flash-lite: 성공 → GEMINI_MODEL_LITE로 확정
+  - gemini-3.8-flash: 429 연속 → 무료 한도 없음 또는 극소로 판단, 사용 안 함
+  - gemini-3.7-flash, gemini-3.6-flash: 503(일시적 과부하) → 접근 자체는 가능해 보임. 3.7을 GEMINI_MODEL_STRONG으로 잠정 지정, 재처리 기능 구현 시 재확인
 - 무료 티어는 입력 데이터가 Google 제품 개선에 쓰일 수 있음(개인 학습 자료이므로 수용, 개인정보는 넣지 않음).
 - 참고: GPT-5.6 Luna는 입력 $0.20 / 출력 $1.20 per 1M (2026-07-30부터, 출처: https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/)
 
@@ -39,3 +43,6 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 
 ## D-009 임베딩은 로컬 BGE-M3, 1024차원 (2026-09-29)
 팀 DB 규격(vector(1024))과 테이블 주석 기준. 질의 임베딩도 같은 모델을 사용한다.
+
+## D-010 외부 API 호출은 재시도 + 폴백 필수 (2026-09-29)
+무료 키에서 429(한도)와 503(과부하)가 실제로 발생함을 확인. 모든 Gemini 호출은 429/503에 지수 백오프 재시도를 하고, GEMINI_MODEL_STRONG이 재시도 후에도 실패하면 GEMINI_MODEL_LITE로 폴백한다. 대량 처리는 분당 요청 수를 제한해서 돌린다.
