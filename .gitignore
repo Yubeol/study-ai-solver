@@ -1,0 +1,24 @@
+# 환경변수 / 비밀정보
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+
+# 로컬 데이터 / 산출물
+data/
+*.log
