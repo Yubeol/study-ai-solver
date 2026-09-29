@@ -63,3 +63,9 @@ def list_subjects(conn: psycopg.Connection, settings: Settings) -> list[str]:
         s=sql.Identifier(settings.db_schema)
     )
     return [r[0] for r in conn.execute(q).fetchall()]
+
+
+def get_material_type(conn: psycopg.Connection, settings: Settings, book_id: UUID) -> str | None:
+    q = sql.SQL("SELECT material_type FROM {s}.books WHERE id = %s").format(s=sql.Identifier(settings.db_schema))
+    row = conn.execute(q, (book_id,)).fetchone()
+    return row[0] if row else None

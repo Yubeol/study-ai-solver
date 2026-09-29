@@ -14,7 +14,7 @@ adsp-study-rag/
 │   │   ├── db/            # connection.py(풀, scoped_transaction), migrate.py(마이그레이션 실행기)
 │   │   ├── repositories/  # books / pages / runs SQL (스키마는 Identifier로 명시)
 │   │   ├── storage/       # Storage 인터페이스, local(구현), s3(자리만), get_storage()
-│   │   └── ingestion/     # images(업로드 검증), pipeline(단계 실행·상태 갱신), stages(단계 함수, 현재 빈 함수)
+│   │   └── ingestion/     # images(업로드 검증·decode_bgr), ocr(PaddleOCR 엔진, 지연 로딩·잠금), pipeline(단계 실행·상태 갱신), stages(단계 함수)
 │   │   # 이후 추가 예정: retrieval, judge, llm
 │   ├── migrations/   # 번호 붙은 SQL 파일 (DDL 변경 이력)
 │   └── tests/        # DB 테스트는 접속 불가 시 skip
@@ -82,7 +82,10 @@ adsp-study-rag/
   - 단계가 `NeedsReview`를 던지면 REVIEW_REQUIRED(review_required=true) 후 그 페이지 중단, 그 밖의 예외는 FAILED
   - 현재 단계·오류·사유·갱신 시각은 page_metadata.pipeline에 기록
   - run 집계: 전부 성공 SUCCESS / 전부 실패 FAILED / 그 외 PARTIAL
-- 단계 함수(`ingestion/stages.py`)는 현재 모두 빈 함수 → 업로드하면 바로 EMBEDDED까지 간다. 아래 1~5를 하나씩 채운다.
+- 구현된 단계: extract_text(인쇄체 PaddleOCR, D-013). 나머지 단계는 `StageNotImplemented` → 페이지는 EXTRACTED에서 멈추고 `pipeline.stopped="not_implemented"`, run은 PARTIAL. 아래 2~5를 하나씩 채운다.
+- extract_text: books.material_type 확인 → personal_note는 REVIEW_REQUIRED("손필기 추출 미구현") / 그 외는 저장소 원본 바이트 → `cv2.imdecode` → OCR → 전체 결과 `books/{book_id}/{page_id}.ocr.json`(engine + lines[text, confidence, bbox]) 저장, `page_metadata.ocr`에 요약(uri, line_count, mean_confidence, 엔진·모델)
+- OCR 엔진은 프로세스당 1개(첫 호출 시 로드), 추론은 잠금으로 직렬화. 모델 캐시는 `OCR_MODEL_DIR`(→ PADDLE_PDX_CACHE_HOME)
+- 테스트: 기본 `uv run pytest`는 가짜 OCR 엔진 사용, 실제 모델은 `uv run pytest -m ocr_model`(맑은 고딕 없으면 skip)
 - 단계 목록은 `app.state.pipeline_stages`로 주입(테스트에서 가짜 단계 사용)
 
 ### 목표 단계

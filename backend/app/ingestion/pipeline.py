@@ -5,6 +5,7 @@
     detect_visuals, chunk_theory → VERIFIED (품질 미달이면 REVIEW_REQUIRED 후 중단)
     embed                       → EMBEDDED
     예외                         → FAILED
+    미구현 단계(StageNotImplemented) → 상태를 바꾸지 않고 멈춤(마지막으로 끝난 상태 유지)
 현재 단계와 오류는 `page_metadata.pipeline`에 기록한다.
 """
 
@@ -18,14 +19,14 @@ from psycopg_pool import ConnectionPool
 
 from app.core.config import Settings
 from app.ingestion import stages
-from app.ingestion.stages import NeedsReview, PageContext
+from app.ingestion.stages import NeedsReview, PageContext, StageNotImplemented
 from app.repositories import pages as pages_repo
 from app.repositories import runs as runs_repo
 from app.storage.base import Storage
 
 log = logging.getLogger(__name__)
 
-PIPELINE_VERSION = "0.1-skeleton"
+PIPELINE_VERSION = "0.2-ocr"
 _ERROR_MAX_LEN = 500
 
 
@@ -62,6 +63,10 @@ def process_page(ctx: PageContext, stage_list: Sequence[Stage]) -> str:
                     conn, settings, ctx.page_id, stage.done_status, {"stage": current, "updated_at": _now()}
                 )
         return "DONE"
+    except StageNotImplemented:
+        info = {"stage": current, "stopped": "not_implemented", "updated_at": _now()}
+        pages_repo.set_pipeline_info(conn, settings, ctx.page_id, info)
+        return "INCOMPLETE"
     except NeedsReview as e:
         info = {"stage": current, "reason": str(e)[:_ERROR_MAX_LEN], "updated_at": _now()}
         pages_repo.set_status(conn, settings, ctx.page_id, "REVIEW_REQUIRED", info)
@@ -85,7 +90,7 @@ def run_pipeline(
     stage_list: Sequence[Stage] = DEFAULT_STAGES,
 ) -> None:
     """실행 1건의 페이지들을 순서대로 처리하고 processing_runs에 집계를 기록한다."""
-    counts = {"DONE": 0, "REVIEW_REQUIRED": 0, "FAILED": 0}
+    counts = {"DONE": 0, "INCOMPLETE": 0, "REVIEW_REQUIRED": 0, "FAILED": 0}
     for page_id in page_ids:
         try:
             with pool.connection() as conn:
@@ -116,6 +121,7 @@ def run_pipeline(
                 success=counts["DONE"],
                 review=counts["REVIEW_REQUIRED"],
                 failure=counts["FAILED"],
+                incomplete=counts["INCOMPLETE"],
             )
         log.info("처리 완료 run_id=%s status=%s counts=%s", run_id, status, counts)
     except Exception:

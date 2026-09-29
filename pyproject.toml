@@ -4,6 +4,10 @@ version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.141.1",
+    "numpy>=2.3.5",
+    "opencv-contrib-python>=4.10.0.84",
+    "paddleocr==3.7.0",
+    "paddlepaddle==3.3.1",
     "pillow>=12.3.0",
     "psycopg[binary,pool]>=3.3.6",
     "pydantic-settings>=2.15.0",
@@ -20,3 +24,6 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["backend"]
 testpaths = ["backend/tests"]
+# 실제 OCR 모델 테스트는 느리므로 기본 실행에서 제외: `uv run pytest -m ocr_model`
+addopts = "-m 'not ocr_model'"
+markers = ["ocr_model: 실제 PaddleOCR 모델을 로드하는 느린 테스트"]

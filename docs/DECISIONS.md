@@ -57,6 +57,28 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 ## D-012 처리 상태는 팀 규격 값만 쓰고, 세부 정보는 JSONB에 둔다 (2026-09-29)
 - pages.processing_status CHECK(RAW/EXTRACTED/REVIEW_REQUIRED/VERIFIED/EMBEDDED/FAILED)에는 "처리 중" 값이 없다. 팀 규격 제약을 바꾸지 않기 위해 단계 묶음이 끝날 때만 상태를 바꾼다(extract_text→EXTRACTED, detect_visuals+chunk_theory→VERIFIED, embed→EMBEDDED, 품질 미달→REVIEW_REQUIRED, 예외→FAILED).
 - 현재 단계·오류는 pages.page_metadata.pipeline, 업로드 순서는 page_metadata.upload_index(pages에 순서 컬럼이 없음), 원본 파일명은 page_metadata.original_filename. DDL 변경 없음.
-- 업로드 1회 = processing_runs 1건. pipeline_version은 모델 이름이 아니므로 코드 상수(`0.1-skeleton`)로 둔다.
+- 업로드 1회 = processing_runs 1건. pipeline_version은 모델 이름이 아니므로 코드 상수(`PIPELINE_VERSION`, 현재 `0.2-ocr`)로 둔다.
 - 백그라운드 실행은 FastAPI BackgroundTasks(프로세스 내). 서버가 재시작되면 진행 중이던 페이지는 중간 상태로 남는다 → 재처리 API로 보완 예정.
 - 업로드 검증은 Pillow(형식·크기 확인만, 원본 바이트는 변경하지 않음). 이후 이미지 처리는 OpenCV(한글 경로 규칙 적용). python-multipart는 FastAPI 파일 업로드에 필요.
+- (2026-09-29 추가) 아직 구현하지 않은 단계는 `StageNotImplemented`를 던지고, 페이지는 상태를 바꾸지 않은 채 멈춘다(마지막으로 끝난 상태 유지, page_metadata.pipeline.stopped="not_implemented"). 이런 페이지는 run 개수 컬럼 어디에도 넣지 않고 run은 PARTIAL로 둔다(page_count - 합계 = 미완료).
+
+## D-013 인쇄체 OCR: PaddleOCR 3.7 + mobile 검출 + 한국어 인식, CPU, oneDNN 끔 (2026-09-29)
+- 설치 (확인일 2026-09-29):
+  - paddlepaddle 3.3.1 (cp312 win_amd64 wheel 있음, 약 105MB), paddleocr 3.7.0 (2026-06-11, Python>=3.8), paddlex 3.7.2. `uv add "paddlepaddle==3.3.1" "paddleocr==3.7.0" numpy opencv-contrib-python`
+  - OpenCV는 paddlex가 `opencv-contrib-python==4.10.0.84`로 고정 → `opencv-python`을 따로 넣지 않는다(cv2 충돌).
+  - 출처: https://pypi.org/project/paddlepaddle/3.3.1/#files , https://pypi.org/project/paddleocr/ , https://www.paddleocr.ai/latest/en/version3.x/installation.html
+- 모델 캐시 위치: `OCR_MODEL_DIR`(현재 `E:\paddle_models`) → import 전에 `PADDLE_PDX_CACHE_HOME`으로 설정. 모델은 `{경로}/official_models`, 잠금·임시 파일도 같은 경로 아래. HuggingFace에서 `snapshot_download(local_dir=...)`로 받으므로 C:의 HF 캐시에는 참조 파일·로그만 남는다(실측 약 100KB).
+  - 공식 사용 문서 본문에는 없고, 근거는 PaddleX 소스와 메인테이너 답변: https://github.com/PaddlePaddle/PaddleX/blob/develop/paddlex/utils/cache.py , https://github.com/PaddlePaddle/PaddleX/blob/develop/paddlex/inference/utils/official_models.py , https://github.com/PaddlePaddle/PaddleOCR/discussions/16631 . 설치된 3.7.2 소스에서도 같은 코드임을 확인.
+  - paddlex가 이미 다른 캐시 값으로 import된 경우 엔진 생성 시 오류를 낸다(모델이 C:로 받아지는 것 방지).
+- 실행 옵션:
+  - `enable_mkldnn=False`: paddlepaddle 3.3.x CPU oneDNN 경로에서 `NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]`가 실제로 발생. 공식 파라미터로 끔. 출처: https://github.com/PaddlePaddle/Paddle/issues/77340 , https://github.com/PaddlePaddle/Paddle/issues/79749 . Paddle이 고치면 다시 켜서 속도 비교.
+  - 문서 방향 분류·왜곡 보정·줄 방향 분류는 끔(기본값은 켜짐, 스캔 교재에 불필요).
+  - 모델: `OCR_DET_MODEL=PP-OCRv5_mobile_det`, `OCR_REC_MODEL=korean_PP-OCRv5_mobile_rec`. 모델 이름을 주면 PaddleOCR가 `lang`을 무시한다 → 검출만 지정하면 비한국어 인식 모델(PP-OCRv6_medium_rec)이 올라와 한글이 모두 빠지는 것을 실측. 그래서 검출을 지정하면 인식도 필수(설정 검증).
+- 실측 (이 PC, CPU 28스레드, oneDNN 끔, 맑은 고딕으로 만든 A4 1654x2339, 30줄):
+  - `lang="korean"` 기본 검출(PP-OCRv5_server_det): A4 1장이 20분 넘게 끝나지 않음 → 사용 불가
+  - PP-OCRv5_mobile_det + korean_PP-OCRv5_mobile_rec: 1장 약 16~17초, 30줄 모두 검출, 평균 신뢰도 0.994
+  - 쉼표 뒤 공백이 빠지는 경우가 있음("선형성, 독립성" → "선형성,독립성"). raw_text는 OCR 결과 그대로 두고 교정하지 않는다.
+  - 실제 교재 스캔으로는 아직 측정하지 않음 → 품질이 낮으면 Gemini 추출 경로를 다시 검토.
+- 동시성: 추론 객체의 스레드 안전성이 문서에 없어 엔진 1개 + 잠금으로 직렬화(BackgroundTasks 스레드풀 대비).
+- 저장: 줄 단위 전체 결과(text, confidence, bbox)는 저장소 `books/{book_id}/{page_id}.ocr.json`, `page_metadata.ocr`에는 요약(uri, 줄 수, 평균 신뢰도, 엔진·버전·모델). theory_chunks는 4-3에서 만든다. 손필기(personal_note)는 비전 LLM 구현 전까지 REVIEW_REQUIRED("손필기 추출 미구현").
+- uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`로 옮김(C 여유 공간 부족).

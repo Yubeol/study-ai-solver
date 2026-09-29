@@ -1,9 +1,10 @@
 """과목 생성 → 이미지 업로드 → 백그라운드 처리 → 상태 조회 (공유 DB 필요).
 
 테스트가 만든 books/processing_runs 행은 끝날 때 지운다(pages는 books 삭제 시 CASCADE).
-저장 파일은 임시 폴더에 둔다.
+저장 파일은 임시 폴더에 둔다. OCR은 가짜 엔진으로 바꿔 모델 없이 돌린다.
 """
 
+import json
 from io import BytesIO
 from uuid import UUID
 
@@ -13,8 +14,10 @@ from PIL import Image
 from psycopg import sql
 
 from app.api.deps import get_storage
+from app.ingestion import ocr
+from app.ingestion.ocr import OcrLine, OcrResult
 from app.ingestion.pipeline import DEFAULT_STAGES, Stage
-from app.ingestion.stages import NeedsReview
+from app.ingestion.stages import NeedsReview, ocr_key
 from app.main import create_app
 from app.storage.local import LocalStorage
 
@@ -47,7 +50,15 @@ def cleanup(db_conn, settings):
             )
 
 
-def _client(tmp_path, stages=DEFAULT_STAGES):
+def _noop(ctx):
+    pass
+
+
+# 모든 단계가 아무것도 하지 않고 성공하는 파이프라인(상태 흐름·API 확인용)
+NOOP_STAGES = tuple(Stage(s.name, _noop, s.done_status) for s in DEFAULT_STAGES)
+
+
+def _client(tmp_path, stages=NOOP_STAGES):
     app = create_app()
     storage = LocalStorage(tmp_path / "저장소")
     app.dependency_overrides[get_storage] = lambda: storage
@@ -55,8 +66,8 @@ def _client(tmp_path, stages=DEFAULT_STAGES):
     return TestClient(app), storage
 
 
-def _create_book(client, cleanup, title="테스트 교재"):
-    r = client.post("/books", json={"title": title, "subject": SUBJECT, "material_type": "textbook"})
+def _create_book(client, cleanup, title="테스트 교재", material_type="textbook"):
+    r = client.post("/books", json={"title": title, "subject": SUBJECT, "material_type": material_type})
     assert r.status_code == 201, r.text
     book = r.json()
     cleanup["books"].append(UUID(book["id"]))
@@ -161,7 +172,7 @@ def _review_second_page(ctx):
 
 
 def _stages(**replace):
-    return tuple(Stage(s.name, replace.get(s.name, s.func), s.done_status) for s in DEFAULT_STAGES)
+    return tuple(Stage(s.name, replace.get(s.name, s.func), s.done_status) for s in NOOP_STAGES)
 
 
 def test_pipeline_review_and_partial(db_conn, tmp_path, cleanup):
@@ -203,3 +214,67 @@ def test_run_not_found(db_conn, tmp_path):
     client, _ = _client(tmp_path)
     with client:
         assert client.get("/processing-runs/00000000-0000-0000-0000-000000000000").status_code == 404
+
+
+class _FakeEngine:
+    engine = {"name": "fake", "lang": "korean", "det_model": "d", "rec_model": "r"}
+
+    def __init__(self):
+        self.shapes = []
+
+    def recognize(self, image):
+        self.shapes.append(image.shape)
+        lines = [OcrLine("데이터 분석", 0.98, (1, 2, 30, 12)), OcrLine("준전문가", 0.9, (1, 15, 25, 25))]
+        return OcrResult(lines, self.engine)
+
+
+@pytest.fixture
+def fake_ocr(monkeypatch):
+    engine = _FakeEngine()
+    monkeypatch.setattr(ocr, "get_engine", lambda settings: engine)
+    return engine
+
+
+def test_default_pipeline_stops_at_extracted(db_conn, tmp_path, cleanup, fake_ocr):
+    """실제 extract_text + 미구현 단계: EMBEDDED로 넘어가지 않고 EXTRACTED에서 멈춘다."""
+    client, storage = _client(tmp_path, DEFAULT_STAGES)
+    with client:
+        book = _create_book(client, cleanup)
+        body = client.post(f"/books/{book['id']}/pages", files=[("files", ("a.png", _png(40, 30), "image/png"))]).json()
+        cleanup["runs"].append(UUID(body["run_id"]))
+        run = client.get(f"/processing-runs/{body['run_id']}").json()
+
+    assert fake_ocr.shapes == [(30, 40, 3)]  # 저장된 원본을 OpenCV로 디코딩해서 넘김
+    assert run["status"] == "PARTIAL"
+    assert (run["success_count"], run["review_count"], run["failure_count"]) == (0, 0, 0)
+    page = run["pages"][0]
+    assert page["processing_status"] == "EXTRACTED" and not page["review_required"]
+    assert page["pipeline"]["stage"] == "detect_visuals"
+    assert page["pipeline"]["stopped"] == "not_implemented"
+
+    meta = db_conn.execute(
+        sql.SQL("SELECT page_metadata->'ocr' FROM {}.pages WHERE id = %s").format(
+            sql.Identifier(client.app.state.settings.db_schema)
+        ),
+        (page["id"],),
+    ).fetchone()[0]
+    uri = f"local://{ocr_key(book['id'], page['id'])}"
+    assert meta == {"uri": uri, "line_count": 2, "mean_confidence": 0.94, **_FakeEngine.engine}
+    saved = json.loads(storage.read(uri).decode("utf-8"))
+    assert [line["text"] for line in saved["lines"]] == ["데이터 분석", "준전문가"]
+    assert saved["lines"][0]["bbox"] == [1, 2, 30, 12]
+
+
+def test_personal_note_needs_review(db_conn, tmp_path, cleanup, fake_ocr):
+    client, _ = _client(tmp_path, DEFAULT_STAGES)
+    with client:
+        book = _create_book(client, cleanup, material_type="personal_note")
+        body = client.post(f"/books/{book['id']}/pages", files=[("files", ("n.png", _png(), "image/png"))]).json()
+        cleanup["runs"].append(UUID(body["run_id"]))
+        run = client.get(f"/processing-runs/{body['run_id']}").json()
+
+    assert fake_ocr.shapes == []  # 손필기는 PaddleOCR로 보내지 않는다
+    assert run["status"] == "PARTIAL" and run["review_count"] == 1
+    page = run["pages"][0]
+    assert page["processing_status"] == "REVIEW_REQUIRED" and page["review_required"]
+    assert page["pipeline"] == {**page["pipeline"], "stage": "extract_text", "reason": "손필기 추출 미구현"}

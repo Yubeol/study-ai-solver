@@ -99,6 +99,14 @@ def set_pipeline_info(conn: psycopg.Connection, settings: Settings, page_id: UUI
     conn.execute(q, (Jsonb(info), page_id))
 
 
+def merge_metadata(conn: psycopg.Connection, settings: Settings, page_id: UUID, values: dict) -> None:
+    """`page_metadata`에 최상위 키를 덮어써서 합친다(예: {"ocr": 요약})."""
+    q = sql.SQL("UPDATE {s}.pages SET page_metadata = page_metadata || %s::jsonb WHERE id = %s").format(
+        s=sql.Identifier(settings.db_schema)
+    )
+    conn.execute(q, (Jsonb(values), page_id))
+
+
 def set_status(
     conn: psycopg.Connection, settings: Settings, page_id: UUID, status: str, info: dict
 ) -> None:

@@ -29,13 +29,14 @@ def create_run(conn: psycopg.Connection, settings: Settings, *, pipeline_version
 
 
 def finish_run(
-    conn: psycopg.Connection, settings: Settings, run_id: UUID, *, success: int, review: int, failure: int
+    conn: psycopg.Connection, settings: Settings, run_id: UUID, *, success: int, review: int, failure: int, incomplete: int = 0
 ) -> str:
     """집계를 기록하고 최종 상태를 돌려준다.
 
-    전부 성공 → SUCCESS, 전부 실패 → FAILED, 그 외(검토 필요 포함) → PARTIAL.
+    전부 성공 → SUCCESS, 전부 실패 → FAILED, 그 외(검토 필요, 미구현 단계에서 멈춤 포함) → PARTIAL.
+    미구현 단계에서 멈춘 페이지는 어느 개수 컬럼에도 넣지 않는다(page_count - 합계 = 미완료).
     """
-    total = success + review + failure
+    total = success + review + failure + incomplete
     if total and failure == total:
         status = "FAILED"
     elif success == total:

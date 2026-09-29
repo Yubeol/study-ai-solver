@@ -40,3 +40,14 @@ def test_unknown_judge_provider_rejected():
 
 def test_password_not_in_repr():
     assert "secret-pw" not in repr(make())
+
+
+def test_ocr_det_model_requires_rec_model():
+    with pytest.raises(ValidationError):
+        make(ocr_det_model="PP-OCRv5_mobile_det")
+    s = make(ocr_det_model="PP-OCRv5_mobile_det", ocr_rec_model="korean_PP-OCRv5_mobile_rec")
+    assert s.ocr_lang == "korean"
+
+
+def test_empty_ocr_model_dir_is_none():
+    assert make(ocr_model_dir="").ocr_model_dir is None

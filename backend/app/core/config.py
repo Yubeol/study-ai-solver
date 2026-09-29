@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/core/config.py → 저장소 루트
@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     # 업로드
     max_upload_mb: int = Field(default=20, gt=0)
 
+    # OCR (PaddleOCR, 인쇄체). 모델 이름이 비어 있으면 언어 기본 모델을 쓴다.
+    ocr_model_dir: Path | None = None  # PADDLE_PDX_CACHE_HOME으로 전달. 비우면 ~/.paddlex
+    ocr_lang: str = "korean"
+    ocr_det_model: str = ""
+    ocr_rec_model: str = ""
+    ocr_device: str = "cpu"
+
+    @field_validator("ocr_model_dir", mode="before")
+    @classmethod
+    def _empty_path_is_none(cls, v):
+        return None if v == "" else v
+
     @field_validator("db_schema", "db_app_schema")
     @classmethod
     def _check_schema_name(cls, v: str) -> str:
@@ -66,6 +78,13 @@ class Settings(BaseSettings):
         if not v or not set(v) <= _IDENTIFIER_CHARS or v[0].isdigit():
             raise ValueError(f"잘못된 스키마 이름: {v!r}")
         return v
+
+    @model_validator(mode="after")
+    def _check_ocr_models(self):
+        # 검출 모델 이름만 주면 PaddleOCR가 lang을 무시하고 비한국어 인식 모델을 올린다(D-013).
+        if self.ocr_det_model and not self.ocr_rec_model:
+            raise ValueError("OCR_DET_MODEL을 지정하면 OCR_REC_MODEL도 지정해야 합니다.")
+        return self
 
     @property
     def storage_dir(self) -> Path:

@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from io import BytesIO
 
+import cv2
+import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 # Pillow 형식 이름 → 저장 확장자
@@ -33,3 +35,11 @@ def inspect_image(data: bytes) -> ImageInfo:
     if fmt not in ALLOWED_FORMATS:
         raise InvalidImage(f"지원하지 않는 형식: {fmt} (PNG/JPEG/WEBP만 가능)")
     return ImageInfo(extension=ALLOWED_FORMATS[fmt], width=width, height=height)
+
+
+def decode_bgr(data: bytes) -> np.ndarray:
+    """바이트를 OpenCV BGR 배열로 연다. 한글 경로 문제를 피하려고 cv2.imread는 쓰지 않는다."""
+    image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise InvalidImage("OpenCV로 디코딩할 수 없음")
+    return image
