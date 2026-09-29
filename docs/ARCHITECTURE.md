@@ -1,47 +1,65 @@
 # ARCHITECTURE
 
-## 저장소 구조 (계획, 첫 세션에서 확정)
+## 저장소 구조
 ```text
 adsp-study-rag/
-├── pyproject.toml / uv.lock / .python-version   # 백엔드 Python 환경 (루트)
+├── pyproject.toml / uv.lock / .python-version   # 백엔드 Python 환경 (루트), pytest 설정 포함
 ├── .env / .env.example
 ├── CLAUDE.md
 ├── backend/
-│   ├── app/          # FastAPI 앱 (api, core, ingestion, retrieval, judge, llm, storage)
+│   ├── app/
+│   │   ├── main.py        # FastAPI 앱 (lifespan에서 커넥션 풀 열고 닫음)
+│   │   ├── api/           # 라우터 (health)
+│   │   ├── core/config.py # .env 설정 (pydantic-settings, 스키마 이름 검증)
+│   │   └── db/            # connection.py(풀, scoped_transaction), migrate.py(마이그레이션 실행기)
+│   │   # 이후 추가 예정: ingestion, retrieval, judge, llm, storage
 │   ├── migrations/   # 번호 붙은 SQL 파일 (DDL 변경 이력)
-│   └── tests/
-├── frontend/         # React + Vite
+│   └── tests/        # DB 테스트는 접속 불가 시 skip
+├── frontend/         # React + Vite (미생성)
 ├── docs/
 └── data/             # 로컬 이미지/산출물 (gitignore)
 ```
+- 실행: `cd backend; uv run uvicorn app.main:app --reload` → `/health`, `/health/db`
+- 테스트: 루트에서 `uv run pytest`
+
+## DB 접근 규칙 (구현)
+- 드라이버: psycopg 3 + psycopg_pool, ORM 없이 SQL 직접 작성. 풀 연결은 autocommit, 트랜잭션은 `conn.transaction()`으로 명시.
+- 스키마 지정: `sql.Identifier(settings.db_schema)`로 명시하거나 `scoped_transaction()`(트랜잭션 안 `SET LOCAL search_path TO app_schema, schema, public`)을 쓴다. public은 확장 타입/연산자용.
+- 마이그레이션: `backend/migrations/NNN_*.sql`에 `{{schema}}`, `{{app_schema}}` 자리표시자를 쓰고 실행기가 설정값으로 치환한다. 파일당 트랜잭션 1개, 이력은 `{{app_schema}}.schema_migrations`(파일명+sha256). 적용된 파일을 수정하면 실행기가 오류를 낸다 → 변경은 새 번호 파일로.
+  - `cd backend; uv run python -m app.db.migrate --dry-run` (치환 결과만 출력) / `uv run python -m app.db.migrate` (적용)
 
 ## DB (확정)
 - 팀 공유 PostgreSQL 16.15, DB `cert_rag`, pgvector 0.8.6, pg_trgm 1.6, pgcrypto 1.3
 - 내 스키마: `mingyu` (팀 규격 테이블, 팀원이 생성 완료). 다른 스키마: jaewon, sugi, sumin (접근 금지)
-- 내 서비스용 스키마: `mingyu_app` (미생성)
+- 내 서비스용 스키마: `mingyu_app` (002 마이그레이션으로 생성, 2026-09-29)
+- 확장은 모두 `public`에 설치됨 → 인덱스 연산자 클래스는 `public.gin_trgm_ops`처럼 명시
 
 ### mingyu 스키마 (팀 규격, 기존)
 - 자료 계층: books → chapters(parent_chapter_id 계층, sort_order) → pages(source_s3_uri, processing_status CHECK, quality_passed, review_required, processing_run_id)
 - 검색 대상: theory_chunks(embedding_text NOT NULL, embedding vector(1024), embedding_enabled, needs_review), visual_assets(visual_type CHECK, crop_s3_uri, 구조 JSONB 다수, embedding_text, embedding, crop_complete)
 - 구조 데이터: visual_groups, visual_tables(page 단위 독립, 임베딩 없음), formulas(임베딩 없음)
 - 관계: theory_visual_links, visual_formula_links, concept_relations, concepts(canonical_name, aliases)
-- 운영: processing_runs, constraint_presets(settings JSONB), query_logs(question_text, question_image_s3_uri, retrieved_*_ids, answer, 비용)
+- 제외 영역: excluded_sections(page_id, section_type, reason, bbox, needs_review) — 예제/기출/코드 등 검색 제외 구간
+- 운영: processing_runs(status CHECK RUNNING/SUCCESS/PARTIAL/FAILED), constraint_presets(settings JSONB, 기존 3행), query_logs(question_text, question_image_s3_uri, retrieved_*_ids, answer, 비용)
+- pages.processing_status CHECK: RAW / EXTRACTED / REVIEW_REQUIRED / VERIFIED / EMBEDDED / FAILED
 - 인덱스: theory_chunks HNSW(vector_cosine_ops, WHERE embedding_enabled), visual_assets HNSW(cosine), theory_chunks.clean_text trgm, books.title trgm
 - 뷰: v_searchable_theory(enabled + 임베딩 있음 + needs_review=false), v_searchable_visual(임베딩 있음 + needs_review=false + crop_complete), v_review_queue
 - 주의: 표·수식은 이론과 직접 링크가 없으므로 page_id / concept_id로 모아 온다.
 
-### mingyu 스키마 보완 (계획, 컬럼/인덱스 추가만)
-- books: subject, material_type(강의노트/교재/개인노트) — 과목 분리와 출처 표시용
-- theory_chunks: sort_order — 페이지 내 순서, 앞뒤 문맥 복원
-- theory_chunks, visual_assets: processing_run_id — 청크 단위 실행 추적
+### mingyu 스키마 보완 (001 적용 완료, 컬럼/인덱스 추가만)
+- books: subject, material_type(CHECK textbook/lecture_note/personal_note), books_subject_idx
+- theory_chunks: sort_order(페이지 내 순서), processing_run_id(FK SET NULL), (page_id, sort_order) 인덱스
+- visual_assets: processing_run_id(FK SET NULL)
 - trgm 인덱스: visual_assets.embedding_text, concepts.canonical_name
+- 새 컬럼은 모두 NULL 허용. 기존 뷰는 변경하지 않았으므로 v_searchable_*에는 새 컬럼이 없다(필요 시 원본 테이블 조인).
 
-### mingyu_app 스키마 (계획)
-- problems: 문제 이미지 URI, 상태
-- problem_extractions: 추출기, 문제문, 보기(JSONB), 수식, 신뢰도
-- solutions: 사용 모델, 답, 풀이, 경로(빠른/재풀이), 확신 라벨, 적용 제약 프리셋
-- solution_evidence: (스키마, 종류, id), 순위, 점수, 인용 원문 스냅샷
-- judgments: 판정 제공자, 질문 키, 답(JSONB), 신뢰도, 지연, 비용
+### mingyu_app 스키마 (002 적용 완료)
+- schema_migrations: filename, checksum, applied_at
+- problems: input_type(image/text), image_uri, question_text, subject, status(RECEIVED/EXTRACTED/SOLVED/FAILED)
+- problem_extractions: extractor, problem_text, choices/formulas(JSONB 배열), confidence(0~1), raw_output
+- solutions: problem_id, query_log_id(→ mingyu.query_logs, SET NULL), question_text, model, answer, explanation, path(fast/retry), confidence_label(high/medium/low/unanswerable), constraint_preset_id(→ mingyu.constraint_presets, SET NULL), preset_snapshot, latency/token/cost
+- solution_evidence: source_schema, source_kind(theory/visual/table/formula), source_id, rank(solution별 UNIQUE), score, quoted_text(스냅샷)
+- judgments: solution_id/problem_id, provider, question_key(can_answer/classify/choose/verify), answer(JSONB), confidence, latency, cost
 - 요약 로그는 팀 규격 query_logs에도 기록한다.
 
 ## 자료 적재 흐름 (업로드 → 백그라운드 처리)
