@@ -4,7 +4,7 @@
 파이프라인 세부 단계·오류는 `page_metadata.pipeline`에 둔다(DDL 변경 없음).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
 
 import psycopg
@@ -32,6 +32,8 @@ class NewPage:
     height: int
     upload_index: int
     original_filename: str
+    printed_page_number: str | None = None
+    extra_metadata: dict = field(default_factory=dict)  # page_metadata에 함께 넣을 값(팀 교재 반입 등)
 
 
 def next_upload_index(conn: psycopg.Connection, settings: Settings, book_id: UUID) -> int:
@@ -46,7 +48,7 @@ def insert_pages(
 ) -> None:
     q = sql.SQL(
         "INSERT INTO {s}.pages (id, book_id, source_s3_uri, source_width, source_height, "
-        "processing_run_id, page_metadata) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+        "processing_run_id, printed_page_number, page_metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
     ).format(s=sql.Identifier(settings.db_schema))
     with conn.cursor() as cur:
         cur.executemany(
@@ -59,7 +61,14 @@ def insert_pages(
                     p.width,
                     p.height,
                     run_id,
-                    Jsonb({"upload_index": p.upload_index, "original_filename": p.original_filename}),
+                    p.printed_page_number,
+                    Jsonb(
+                        {
+                            **p.extra_metadata,
+                            "upload_index": p.upload_index,
+                            "original_filename": p.original_filename,
+                        }
+                    ),
                 )
                 for p in pages
             ],

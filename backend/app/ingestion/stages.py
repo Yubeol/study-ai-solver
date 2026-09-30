@@ -44,6 +44,11 @@ def ocr_key(book_id: UUID, page_id: UUID) -> str:
     return f"books/{book_id}/{page_id}.ocr.json"
 
 
+def text_key(book_id: UUID, page_id: UUID) -> str:
+    """OCR 대신 외부 텍스트(팀 텍스트 등)를 추출 결과로 쓸 때의 저장 키(D-014)."""
+    return f"books/{book_id}/{page_id}.text.json"
+
+
 def extract_text(ctx: PageContext) -> None:
     """텍스트 추출. 인쇄체(textbook/lecture_note) → PaddleOCR, 손필기 → 비전 LLM(미구현) (D-008).
 

@@ -104,3 +104,19 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 판정기 인터페이스에 `reason_match`(내 이유가 근거와 일치?), `error_type`(틀린 유형 선택)을 추가한다. JUDGE_PROVIDER=none이면 LLM 구조화 출력으로 대신하거나 비워 두고, 흐름은 끝까지 간다.
 - 개념 혼동 설명에는 theory_chunks.confusable_concepts와 concept_relations(compare)를 쓴다.
 - 테이블은 mingyu_app에 wrong_notes / wrong_note_evidence / wrong_note_attempts로 설계만 해 두고(ARCHITECTURE "오답노트"), 마이그레이션은 구현 세션에서 사용자 확인 후 적용한다. judgments.question_key CHECK도 그때 새 마이그레이션으로 확장한다.
+
+## D-018 팀 교재 반입: pypdfium2 렌더링, page_map.json 매핑, 합본 텍스트는 첫 쪽에 (2026-09-30)
+- PDF 렌더링 라이브러리: **pypdfium2 5.13.0** (2026-08-13 릴리스, `py3-none-win_amd64` wheel). 라이선스 **BSD-3-Clause 또는 Apache-2.0**(이중), 내장 PDFium은 BSD 계열. 출처: https://pypi.org/project/pypdfium2/ (확인 2026-09-30)
+  - 제외: PyMuPDF 1.28.2는 **AGPL-3.0 또는 Artifex 상용** 이중 라이선스 → 과제 코드 공개 범위와 충돌 가능성이 있어 쓰지 않음. 출처: https://pypi.org/project/PyMuPDF/ (확인 2026-09-30)
+  - `uv add "pypdfium2==5.13.0"` (paddlex 의존성으로 이미 설치돼 있어 직접 의존성으로 고정만 함)
+- 경로 주의: 팀 PDF 파일명이 **NFD**(자모 분리, macOS 압축 추정)로 저장돼 있어 NFC로 쓴 경로는 FileNotFoundError. 파일은 NFC 비교로 찾고, PDFium에는 파일 객체로 넘긴다.
+- 팀 PDF 구조: 장마다 JPEG(DCTDecode) 1장, 1pt = 1px → 72 DPI 렌더가 원본 해상도. 저장용은 `TEAM_IMPORT_RENDER_DPI`(기본 72) JPEG, 대조용 미리보기는 `TEAM_IMPORT_PREVIEW_DPI`(기본 14)로 분리.
+- 팀 텍스트 인코딩: 전 파일(과1 49, 과2 64, 과3 210) **UTF-8, BOM 없음, LF** 확인(cp949 아님). 파일명도 정상(깨지지 않음). strict UTF-8로 읽고 원문 그대로 저장.
+- 매핑(표본 대조, "PDF 장 + offset = 인쇄 쪽" 가정 검증, `data/raw/adsp/page_map.json`):
+  - 1과목: 50장 = 14~63쪽, offset +13 일정. `과1-58-59p.txt` 한 파일에 58·59쪽 내용이 이어져 있음(58쪽=PDF 45장, 59쪽=PDF 46장)
+  - 2과목: 64장 = 66~129쪽, offset +65 일정
+  - 3과목: 211장이지만 **216쪽은 촬영 안 됨**, **252쪽은 120·121장에 중복 촬영**. 1~84장 +131, 85~120장 +132, 121장 건너뜀, 122~211장 +131 → pages 210행. `과3-216-217p.txt`의 내용은 217쪽뿐
+  - (D-014의 "3과목 PDF 94~96장 = 226~228쪽"은 이 매핑과 일치)
+  - 보조 확인: 텍스트 끝 쪽번호 줄과 대조 1과목 49/49, 2과목 55/55, 3과목 200/201 일치(나머지는 쪽번호 줄 없음, 3과목 159쪽 1건은 R 출력 숫자 오탐). `|`가 1로 읽힌 경우("127" = 27쪽)도 일치로 봄
+- 합본 텍스트 처리(잠정, 사용자 확인 대기): 여러 쪽짜리 파일은 첫 쪽에 붙이고 나머지 쪽은 REVIEW_REQUIRED("team_text 없음 (…에 합쳐져 있음)"). 텍스트를 임의로 나누지 않는다.
+- 반입 방식: 원본 파일명 변경·복사본 없이 page_map.json이 원본 경로를 가리킨다(D-014의 파일명 정리 단계 대체). 중복 방지는 books(subject, title, source_name) 존재 여부, 파일 저장 후 book 단위 트랜잭션(books + processing_runs 1건 + pages), 실패 시 저장 파일 삭제. EXTRACTED 페이지는 run 집계에서 미완료로 셈 → run은 PARTIAL(D-012).

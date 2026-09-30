@@ -20,13 +20,25 @@ def create_book(
     material_type: str,
     edition: str | None = None,
     source_name: str | None = None,
+    book_id: UUID | None = None,
 ) -> dict:
+    """`book_id`를 주면 그 id로 만든다(파일을 먼저 저장해야 하는 반입 스크립트용)."""
     q = sql.SQL(
-        "INSERT INTO {s}.books AS b (title, subject, material_type, edition, source_name) "
-        "VALUES (%s, %s, %s, %s, %s) RETURNING {cols}"
+        "INSERT INTO {s}.books AS b (id, title, subject, material_type, edition, source_name) "
+        "VALUES (coalesce(%s, gen_random_uuid()), %s, %s, %s, %s, %s) RETURNING {cols}"
     ).format(s=sql.Identifier(settings.db_schema), cols=_BOOK_COLUMNS)
     with conn.cursor(row_factory=dict_row) as cur:
-        return cur.execute(q, (title, subject, material_type, edition, source_name)).fetchone()
+        return cur.execute(q, (book_id, title, subject, material_type, edition, source_name)).fetchone()
+
+
+def find_book_ids(
+    conn: psycopg.Connection, settings: Settings, *, subject: str, title: str, source_name: str
+) -> list[UUID]:
+    """같은 과목·제목·출처의 books id 목록(반입 재실행 시 중복 방지용)."""
+    q = sql.SQL("SELECT id FROM {s}.books WHERE subject = %s AND title = %s AND source_name = %s").format(
+        s=sql.Identifier(settings.db_schema)
+    )
+    return [r[0] for r in conn.execute(q, (subject, title, source_name)).fetchall()]
 
 
 def _select_with_counts(settings: Settings, where: sql.Composable) -> sql.Composed:

@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     ocr_rec_model: str = ""
     ocr_device: str = "cpu"
 
+    # 팀 교재 반입 (D-014, D-018). 팀 PDF는 1pt = 사진 1픽셀이라 72 DPI가 원본 해상도다.
+    team_import_dir: Path = Field(default=Path("data/raw/adsp"))  # page_map.json, pdf/, team_text/ 위치
+    team_import_render_dpi: int = Field(default=72, gt=0)  # 저장용 페이지 이미지
+    team_import_jpeg_quality: int = Field(default=92, ge=1, le=100)
+    team_import_preview_dpi: int = Field(default=14, gt=0)  # 쪽번호 대조용 저해상도 미리보기
+    reports_dir: Path = Field(default=Path("data/reports"))  # dry-run 계획·미리보기 출력
+
     @field_validator("ocr_model_dir", mode="before")
     @classmethod
     def _empty_path_is_none(cls, v):
@@ -88,8 +95,20 @@ class Settings(BaseSettings):
 
     @property
     def storage_dir(self) -> Path:
-        p = self.local_storage_dir
-        return p if p.is_absolute() else ROOT_DIR / p
+        return _from_root(self.local_storage_dir)
+
+    @property
+    def team_import_path(self) -> Path:
+        return _from_root(self.team_import_dir)
+
+    @property
+    def reports_path(self) -> Path:
+        return _from_root(self.reports_dir)
+
+
+def _from_root(p: Path) -> Path:
+    """상대 경로는 저장소 루트 기준으로 해석한다."""
+    return p if p.is_absolute() else ROOT_DIR / p
 
 
 @lru_cache
