@@ -19,19 +19,27 @@ _embedder = None
 _embedder_lock = threading.Lock()
 
 
+def ensure_hf_home(settings: Settings) -> None:
+    """HF_HOME을 EMBEDDING_MODEL_DIR로 맞춘다(임베딩·리랭커 공용 캐시). sentence_transformers import 전에 부른다.
+
+    이미 다른 위치로 import돼 있으면 모델이 C:에 받아지므로 오류로 멈춘다.
+    """
+    if settings.embedding_model_dir is None:
+        return
+    os.environ["HF_HOME"] = str(settings.embedding_model_dir)
+    import huggingface_hub.constants
+
+    actual = Path(huggingface_hub.constants.HF_HOME).resolve()
+    if actual != settings.embedding_model_dir.resolve():
+        raise RuntimeError(f"HF_HOME이 설정과 다름(이미 import됨): {actual}")
+
+
 class LocalEmbedder:
     def __init__(self, settings: Settings):
         if not settings.embedding_model:
             raise RuntimeError("EMBEDDING_MODEL이 비어 있습니다.")
-        if settings.embedding_model_dir is not None:
-            os.environ["HF_HOME"] = str(settings.embedding_model_dir)
-        import huggingface_hub.constants
+        ensure_hf_home(settings)
         from sentence_transformers import SentenceTransformer
-
-        if settings.embedding_model_dir is not None:
-            actual = Path(huggingface_hub.constants.HF_HOME).resolve()
-            if actual != settings.embedding_model_dir.resolve():
-                raise RuntimeError(f"HF_HOME이 설정과 다름(이미 import됨): {actual}")
 
         self.model_name = settings.embedding_model
         self._model = SentenceTransformer(settings.embedding_model, device=settings.embedding_device)
@@ -63,6 +71,16 @@ def get_embedder(settings: Settings) -> LocalEmbedder:
             if _embedder is None:
                 _embedder = LocalEmbedder(settings)
     return _embedder
+
+
+def release_embedder() -> None:
+    """모델을 메모리에서 내린다(평가에서 질문 임베딩 후 리랭커를 올리기 전에, RAM 절약)."""
+    global _embedder
+    with _embedder_lock:
+        _embedder = None
+    import gc
+
+    gc.collect()
 
 
 def to_pgvector(vec: np.ndarray) -> str:

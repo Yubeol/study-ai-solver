@@ -151,19 +151,20 @@ adsp-study-rag/
 6. 저장: mingyu_app 상세 + query_logs 요약
 7. "자료에서 확인 불가"이면 이론 보충 입력으로 연결(아래 "이론 보충·수정")
 
-### "확인 불가" 2단계 판단 (설계, 2026-09-30 — 값은 미정)
+### "확인 불가" 2단계 판단 (2026-09-30, 값은 33문항 기준 잠정값 — D-024)
 - 1단계(거름망): **임베딩 1위 점수**가 아주 낮으면 리랭커·LLM 호출 없이 바로 "자료에서 확인 불가". 이 값은 자료에 없는 질문을 다 거르려는 용도가 아니라, 확실히 먼 질문만 싸게 끊는 용도라 낮게 잡는다.
 - 2단계(겹치는 구간): 1단계를 통과한 질문은 **리랭커 점수** 또는 **판정기 can_answer**로 답할 수 있는지 판단한다. 판정기는 교체 가능 모듈이므로 `JUDGE_PROVIDER=none`이면 리랭커 점수만으로 판단한다.
 - 근거: 33문항 평가(2026-09-30)에서 임베딩 1위 점수가 답할 수 있는 질문 0.516~0.709, 자료에 없는 질문 0.419~0.608로 0.52~0.61에서 겹쳐 점수 하나로는 못 가른다(특히 교재 인접 주제 경계 사례).
-- 1단계 값과 2단계 리랭커 임계값은 다음 세션에서 리랭커를 붙인 뒤 같은 평가 세트로 재어 정하고 `.env`/`config.py`에 둔다.
+- 값(D-024): 1단계 `ANSWERABLE_MIN_VECTOR_SCORE`=0.45, 2단계 `ANSWERABLE_MIN_RERANK_SCORE`=0.15(`BAAI/bge-reranker-v2-m3` sigmoid 점수). 판단 함수는 `app/retrieval/search.py`의 `is_answerable(settings, 벡터 1위, 리랭커 1위)` → (답변 시도 여부, 이유 `no_result`/`vector_below_floor`/`rerank_below_threshold`/`ok`). 리랭커가 없으면 1단계만.
+- 알려진 대가: 정답이 1위여도 표·수식이 뭉친 청크는 리랭커 점수가 낮아 "확인 불가"가 될 수 있다(c06, c09).
 
-### 검색 단계 상세 (설계, 후보·미검증, 2026-09-30)
-- 현재 구현: 벡터 검색만(`app/retrieval/search.py`, v_searchable_theory, cosine, `SEARCH_TOP_K`).
-- 목표 구조: 벡터(+키워드) 후보 **N개** → 리랭커 → 상위 **K개**. N, K, 리랭커 모델 이름은 `.env` 설정값(이름 예: `SEARCH_CANDIDATE_N`, `SEARCH_TOP_K`, `RERANKER_MODEL`(비우면 리랭커 생략), `RERANKER_MAX_LENGTH`).
-- 리랭커 후보: `BAAI/bge-reranker-v2-m3`, `dragonkue/bge-reranker-v2-m3-ko`(한국어 미세조정, Apache-2.0로 알려짐). `max_length` 1024 권장.
+### 검색 단계 상세 (리랭커 구현 2026-09-30, 키워드 검색은 미검증)
+- 현재 구현: 벡터 후보 `SEARCH_CANDIDATES_N`(10)개(`app/retrieval/search.py`의 `search_theory`, v_searchable_theory, cosine) → 리랭커(`app/retrieval/rerank.py`, `RERANKER_MODEL`=`BAAI/bge-reranker-v2-m3`, CrossEncoder + sigmoid, 입력 `RERANKER_INPUT`=embedding_text) → 상위 `SEARCH_TOP_K`(5)개. 리랭크 결과 행에는 `vector_rank`·`vector_score`·`rerank_score`가 붙는다. `RERANKER_MODEL`이 비면 벡터 순위 그대로. 모델은 프로세스당 1개(임베딩과 같은 HF_HOME 캐시), CPU에서 질문당 평균 6초(D-024).
+- 목표 구조: 벡터(+키워드) 후보 **N개** → 리랭커 → 상위 **K개**. 키워드 후보 합치기는 아직 없음.
+- 리랭커 비교 결과(D-024): `dragonkue/bge-reranker-v2-m3-ko`는 순위는 더 좋지만 정답에도 0에 가까운 점수를 줘 "확인 불가" 임계값에 못 써서 `BAAI/bge-reranker-v2-m3` 채택. 평가 스크립트는 `--reranker <모델|none> --n <N> --rerank-input <embedding_text|clean_text>`로 비교하고, 리랭크 시 질문 임베딩 후 임베딩 모델을 내리고 리랭커를 올린다(RAM).
 - 임베딩 대안 후보: `dragonkue/BGE-m3-ko` — 차원이 1024인지 확인 필요. 같으면 `EMBEDDING_MODEL` 교체 + 재임베딩만으로 비교 가능(DB 컬럼 vector(1024)는 그대로).
 - 키워드 검색 보강 후보: Kiwi(kiwipiepy) 형태소 기반, 또는 BGE-M3 sparse(lexical) 출력. 현재 인덱스인 trgm(clean_text)과 비교.
-- 위 후보는 **모두 미검증**이다. 채택·버전·라이선스·차원은 해당 구현 세션에서 공식 자료(모델 카드, PyPI)로 확인한 뒤 DECISIONS에 기록한다. 비교는 아래 "검색 평가"의 같은 질문 세트로 한다.
+- 임베딩 대안·키워드 검색 후보는 **미검증**이다. 채택·버전·라이선스·차원은 해당 구현 세션에서 공식 자료(모델 카드, PyPI)로 확인한 뒤 DECISIONS에 기록한다. 비교는 아래 "검색 평가"의 같은 질문 세트로 한다.
 
 ### 검색 평가 (구현 2026-09-30)
 - 질문 세트 파일: `data/eval/questions.csv` (data/는 gitignore, 커밋 안 함). 질문은 20~30개(현재 33개: Claude 초안 + 사용자 검토, 자료에 없는 질문에 경계 사례 `boundary` 포함).

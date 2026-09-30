@@ -26,9 +26,10 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["backend"]
 testpaths = ["backend/tests"]
-# 실제 모델 테스트는 느리므로 기본 실행에서 제외: `uv run pytest -m ocr_model`, `-m embedding_model`
-addopts = "-m 'not ocr_model and not embedding_model'"
+# 실제 모델 테스트는 느리므로 기본 실행에서 제외: `uv run pytest -m ocr_model`, `-m embedding_model`, `-m reranker_model`
+addopts = "-m 'not ocr_model and not embedding_model and not reranker_model'"
 markers = [
     "ocr_model: 실제 PaddleOCR 모델을 로드하는 느린 테스트",
     "embedding_model: 실제 임베딩 모델(BGE-M3)을 로드하는 느린 테스트",
+    "reranker_model: 실제 리랭커 모델을 로드하는 느린 테스트",
 ]

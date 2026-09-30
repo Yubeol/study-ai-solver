@@ -181,3 +181,31 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - c07(recall=sensitivity인지, specificity 뜻): p271 청크(needs_review 포함 1개)는 민감도(TPR)·특이도(TNR)·1-특이도(FPR) 정의는 있으나 "recall/재현율"이 한 번도 없어 "같은 거야?"에 답할 수 없음 → **추가 안 함**, 정답은 p268|269(p268 표에 "민감도(Sensitivity) = Recall(재현율)").
   - 결과적으로 정답 쪽 변경 없음 → 재평가 불필요, 수치는 20260930-195048 그대로.
 - "확인 불가"는 2단계로 판단한다(ARCHITECTURE의 "확인 불가" 2단계 판단 절): 임베딩 1위 점수는 1차 거름망(아주 낮으면 LLM 호출 없이 바로 확인 불가), 겹치는 구간은 리랭커 점수 또는 판정기 can_answer. `JUDGE_PROVIDER=none`이면 리랭커 점수만. 값은 다음 세션에서 리랭커 점수로 평가 후 정한다(D-022 추가 사항과 같은 방향).
+
+## D-024 리랭커: BAAI/bge-reranker-v2-m3, 후보 N=10, 입력 embedding_text, "확인 불가" 2단계 잠정값 (2026-09-30)
+- 모델 정보(확인 2026-09-30, Hugging Face 모델 카드 + `https://huggingface.co/api/models/{repo}`):
+  - `BAAI/bge-reranker-v2-m3`: Apache-2.0, 0.6B, bge-m3 기반 다국어 cross-encoder(XLMRobertaForSequenceClassification, 출력 1개). 카드 예시는 FlagEmbedding·transformers, `normalize=True`면 sigmoid로 0~1, 카드 예시 max_length 512(토크나이저 model_max_length 8192). HF 라이브러리 표기 sentence-transformers. 받은 커밋 953dc6f(2024-06-24), `model.safetensors` 2.27GB. 출처: https://huggingface.co/BAAI/bge-reranker-v2-m3
+  - `dragonkue/bge-reranker-v2-m3-ko`: Apache-2.0, 0.6B, 위 모델을 한국어로 미세조정. 카드에 sentence-transformers `CrossEncoder` 사용법과 sigmoid 출력 명시, 평가는 한국 금융 도메인 벤치마크. 받은 커밋 2aca588(2025-04-03), 2.27GB. 출처: https://huggingface.co/dragonkue/bge-reranker-v2-m3-ko
+  - 로드: 설치된 sentence-transformers 6.1.0의 `CrossEncoder(name, max_length=, activation_fn=torch.nn.Sigmoid())`(출력 1개면 기본값도 Sigmoid — 설치본 `cross_encoder/model.py` docstring 확인). 새 의존성 없음. 캐시는 임베딩과 같은 `EMBEDDING_MODEL_DIR`→HF_HOME(`E:\hf_models`, 세 모델 합계 8.51GB). 다운로드는 사용자가 `hf download`로 미리 받음.
+- 비교(같은 33문항, 정답 쪽 기준 D-023, K=5, CPU, 한 번에 리랭커 1개만 로드). 표의 hit@1은 답할 수 있는 26문항 기준:
+
+  | 설정 | hit@1 | hit@3 | hit@5 | MRR | 과목별 hit@1(1/2/3) | 리랭크 시간 평균/최대(초) |
+  |---|---|---|---|---|---|---|
+  | 벡터만 | 21 (81%) | 25 | 26 | 0.881 | 7/8 · 8/8 · 6/10 | - |
+  | v2-m3, N=20, embedding_text | 22 (85%) | 25 | 25 | 0.910 | 6/8 · 7/8 · 9/10 | 12.6 / 20.1 |
+  | v2-m3, N=20, clean_text | 21 (81%) | 25 | 26 | 0.886 | 5/8 · 7/8 · 9/10 | 8.4 / 13.8 |
+  | **v2-m3, N=10, embedding_text** | **22 (85%)** | **26** | **26** | **0.917** | 6/8 · 7/8 · 9/10 | **6.0 / 10.2** |
+  | v2-m3, N=30, embedding_text | 22 (85%) | 25 | 25 | 0.910 | 6/8 · 7/8 · 9/10 | 14.6 / 26.9 |
+  | -ko, N=20, embedding_text | 24 (92%) | 26 | 26 | 0.962 | 6/8 · 8/8 · 10/10 | 10.3 / 18.1 |
+  | -ko, N=20, clean_text | 23 (88%) | 25 | 25 | 0.929 | 6/8 · 8/8 · 9/10 | 12.0 / 16.8 |
+- 결정: **`BAAI/bge-reranker-v2-m3` + N=10 + 입력 embedding_text**.
+  - `-ko`는 순위는 가장 좋지만, **점수를 "확인 불가" 판단에 쓸 수 없다**: 1위에 정답을 올리고도 점수가 0.000~0.05인 답 가능 질문이 6개(a05·b08·c02·c06·c07·c09, 입력을 clean_text로 바꿔도 비슷). 임계값을 0.01로 잡아도 답 가능 26개 중 6개를 막는다. v2-m3는 답 가능 1위 점수 최저 0.043, 자료 없음은 n08 말고 모두 0.005 이하라 분리된다. 두 모델을 동시에 올려 순위(-ko)·판단(v2-m3)을 나누는 방법은 RAM(여유 약 6GB)·시간 때문에 제외.
+  - N=10이 N=20/30보다 낫다: N=20/30은 벡터 13~19위 청크가 리랭커로 올라와 c06(정답 벡터 1위)이 6위로 밀려 K 밖, n08(자료 없음)이 벡터 13위 DBSCAN 청크로 0.622를 받는다. 시간도 N에 비례.
+  - embedding_text(제목 경로 + 본문)가 clean_text보다 두 모델 모두 순위가 좋다. 입력 토큰은 최대 545·중앙 약 270이라 `RERANKER_MAX_LENGTH`=1024에서 잘리는 쌍 0.
+- 리랭커가 푼 것/못 푼 것(v2-m3, N=10, 벡터 → 리랭크 순위): c01 4→1, c02 3→1, c07 3→1, c09 2→1(용어 중의성·청킹 문제 질문 모두 1위). a06 2→2(p45 "데이터의 오용"이 여전히 1위, 이름이 없는 쪽 — D-023 기준 오답). 나빠진 것: a02 1→2, b02 1→2, c06 1→3. 3과목 hit@1 60%→90%, 1·2과목은 한 문항씩 내려감.
+- "확인 불가" 2단계 값(**33문항 기준 잠정값**, 질문이 Claude 초안이라 실제 질문으로 다시 재야 함):
+  - 1단계 `ANSWERABLE_MIN_VECTOR_SCORE=0.45`: 답 가능 벡터 1위 최저 0.516보다 충분히 낮게(먼 주제 n01 0.419만 걸러 리랭크 시간 절약). 0.50은 답 가능 최저와 0.016 차이라 리랭커 확인 없이 막을 위험이 있어 쓰지 않음.
+  - 2단계 `ANSWERABLE_MIN_RERANK_SCORE=0.15`: 자료 없음 최고 0.131(n08, 경계 사례)과 답 가능 쪽 c07 0.208 사이 가운데. 결과 답 가능 24/26 통과, 자료 없음 7/7 차단. **보수적으로 잡은 대가**로 정답이 1위인데도 점수가 낮은 c06(0.043)·c09(0.066)는 "확인 불가"가 된다(두 정답 청크는 표·수식이 한 줄로 뭉친 청크 — p339 향상도 공식, p245~247). 0.05로 낮추면 c09를 살리지만 n08과의 차이가 줄어 택하지 않음.
+  - `JUDGE_PROVIDER=none`에서는 이 두 값만으로 판단. 판정기(can_answer)를 붙이면 0.15 근처 구간을 판정기에 넘기는 방식을 다음 세션에서 검토.
+- 속도: CPU에서 질문당 리랭크 평균 6.0초/최대 10.2초(N=10). 답변 흐름 지연에 그대로 더해지므로 화면에서 "검색 중" 표시 필요. 줄일 방법(ONNX 백엔드, fp16 불가한 CPU, N 축소)은 필요해지면 검토.
+- 평가 결과 파일: `data/reports/eval/` 20260930-201321(벡터), -202649(v2-m3 N20), -203344(-ko N20), -203942(v2-m3 clean), -204741(-ko clean), -205236(v2-m3 N10, 채택), -210116(v2-m3 N30).

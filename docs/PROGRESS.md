@@ -1,6 +1,6 @@
 # PROGRESS
 
-## 현재 상태 (2026-09-30 검색 평가 실행·정답 쪽 기준 세션 기준)
+## 현재 상태 (2026-09-30 리랭커 비교 세션 기준)
 - 환경·문서: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
   - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`(C 여유 부족). 새 터미널부터 적용
 - 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev 키는 사용자가 .env에 넣음(TYPESAFE_API_KEY, JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS — 코드에서는 아직 안 씀, 값 미확인). S3 미확인 → STORAGE_BACKEND=local
@@ -13,10 +13,11 @@
   - **임베딩 완료(D-020)**: `app/ingestion/embedding.py`(BGE-M3, sentence-transformers 6.1.0, torch CPU, 정규화, 캐시 `E:\hf_models` 4.3GB) + `stages.embed`. **팀 교재 324쪽 전부 EMBEDDED**, v_searchable_theory 605행, 검색 대상인데 임베딩 없는 청크 0. 전체 실행 시간(processing_runs started_at~finished_at, 1과목에 모델 로딩 포함) 1과목 1분49초 / 2과목 2분35초 / 3과목 7분45초
   - 실행 진입점: `python -m app.ingestion.run_stages`(dry-run 기본, `--apply --subject`, `--stages chunk|embed|chunk,embed`, `--pages`). Ctrl+C 등으로 끊기면 run을 FAILED로 닫음(창 닫기·kill은 RUNNING으로 남을 수 있음). 검색 확인: `python -m app.retrieval.search "질문"`(v_searchable_theory)
   - **검색 평가 스크립트(D-022)**: `python -m app.retrieval.evaluate`(`--questions`, `--k`, `--check`). hit@1/3/K·MRR(과목별·전체) + 임계값별 통과·차단 → `data/reports/eval/`. **실제 세트 33문항(`data/eval/questions.csv`)으로 평가 완료** — 결과는 아래 "자체 평가 메모". 실행하면 HTML 보고서(`app/retrieval/eval_report.py`, 질문별 정답 쪽·상위 K개 청크·페이지 썸네일, `data/reports/eval/{시각}.html` + `thumbs/`)도 자동 생성, 기존 json으로 다시 만들기 `python -m app.retrieval.eval_report [json]`
+  - **리랭커(D-024)**: `app/retrieval/rerank.py`(sentence-transformers CrossEncoder, sigmoid 0~1). 채택 `BAAI/bge-reranker-v2-m3`, 벡터 후보 N=10, 입력 embedding_text, 캐시 `E:\hf_models`(bge-m3 + 리랭커 2개 = 8.51GB). `search.py`는 `RERANKER_MODEL`이 있으면 리랭크하고 "확인 불가" 2단계 판단 `is_answerable`(1단계 벡터 1위 ≥ 0.45, 2단계 리랭커 1위 ≥ 0.15, **33문항 기준 잠정값**). 평가는 `evaluate --reranker <모델|none> --n --rerank-input`. CPU에서 질문당 리랭크 평균 6.0초·최대 10.2초
   - detect_visuals는 `StageNotImplemented` → 업로드 경로 기본 파이프라인은 여전히 **EXTRACTED에서 멈춤**
   - 모델 캐시: `OCR_MODEL_DIR=E:\paddle_models` (현재 19MB, 쓰는 모델 2개만)
   - 속도(맑은 고딕으로 만든 A4 30줄): 1장 약 16초, 평균 신뢰도 0.994. **실제 교재 스캔으로는 아직 미측정**
-- 테스트: `uv run pytest` 77개 통과(가짜 OCR·가짜 임베더, 청킹 규칙 10개, 실행 중단 1개, 평가 계산 6개, 평가 보고서 2개 포함), `-m ocr_model` 1개, `-m embedding_model` 1개(실제 BGE-M3) 통과
+- 테스트: `uv run pytest` 82개 통과(가짜 OCR·가짜 임베더·가짜 리랭커, 청킹 규칙 10개, 실행 중단 1개, 평가 계산 6개, 평가 보고서 2개, 리랭크·2단계 판단 5개 포함), `-m ocr_model` 1개, `-m embedding_model` 1개(실제 BGE-M3), `-m reranker_model` 1개(실제 v2-m3) 통과
 - 프론트엔드: 미생성
 - 문서: 설계 보완(오답노트·검수 도구·시각자료 표시 원칙·팀 교재 반입·crop 계획, D-014~D-017). 사용자용 문서 `docs/sessions/`(세션별 설명), `docs/MODIFY_GUIDE.md`(수정 위치 표) — 세션 시작 시 읽지 않음
 - 팀 방향(D-021): 공용 프론트 없이 각자 개인 프로젝트. 팀 규격 테이블 "기존 컬럼 변경 금지·추가만" 유지, mingyu_app·API는 자유
@@ -25,15 +26,12 @@
 ## 다음 작업 (2026-09-30 방향 조정: 텍스트 end-to-end 우선)
 설계는 ARCHITECTURE의 "질의 흐름"(검색 단계 상세, 검색 평가), "이론 보충·수정", "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-021 참고.
 - (완료 2026-09-30) 검색 평가 실행 — 결과·틀린 질문 분류는 "자체 평가 메모". 확인 불가 임계값은 **확정하지 않음**(리랭커 점수로 다시 평가 후 결정). 정답 쪽 기준 확정(D-023: 그 쪽만 보고 답할 수 있으면 정답) → a06·c07 검토 결과 변경 없음. "확인 불가" 2단계 판단 설계(ARCHITECTURE)
-1. **[다음 세션] 리랭커 + "확인 불가" 2단계 + 질의 흐름(판정 Jev 포함)** — 한 세션에 다 안 되면 1-a만 해도 됨
-   - 1-a 리랭커 비교(먼저):
-     - 후보 `BAAI/bge-reranker-v2-m3`, `dragonkue/bge-reranker-v2-m3-ko`(ARCHITECTURE "검색 단계 상세", 모두 미검증) → 모델 카드·라이선스·max_length·sentence-transformers CrossEncoder 지원 여부를 공식 자료로 확인해 DECISIONS에 날짜·URL 기록. 모델 캐시는 E:(`EMBEDDING_MODEL_DIR`과 같은 HF_HOME), 모델 이름은 `.env`(예: `RERANKER_MODEL`, 후보 수 `SEARCH_CANDIDATES_N`) — 새 값은 `.env.example`·MODIFY_GUIDE도 갱신
-     - 코드 위치: `backend/app/retrieval/search.py`(벡터 후보 N개) 뒤에 리랭크 단계, `backend/app/retrieval/evaluate.py`에 리랭커 켠 평가(config의 `"reranker"`에 모델명 기록, 리랭커 점수 기준 임계값 표 추가). 테스트는 가짜 리랭커로(실제 모델은 `-m` 마커)
-     - 같은 세트 `data/eval/questions.csv`(33문항, 정답 쪽 기준 D-023)로 비교 → PROGRESS "자체 평가 메모"에 한 줄 추가. 볼 것: hit@1(현재 81%, 3과목 60%), c01·c02·c09(용어 중의성)·a06·c07 순위, 자료 없음 7개(특히 boundary n06~n08)와 답 가능의 **리랭커 점수 분리**
-     - 그 결과로 "확인 불가" 2단계 값 결정(ARCHITECTURE의 "확인 불가" 2단계 판단 절): 1단계 임베딩 1위 점수 하한(낮게), 2단계 리랭커 임계값 → config/.env에 두고 DECISIONS 기록
-   - 1-b 질의 흐름: 검색 → (1단계 거름망) → 답변 가능 판정(리랭커 점수 / can_answer) → 답변 생성(근거 번호 인용, 프롬프트는 `backend/app/prompts/` 텍스트 파일) → 근거 일치 판정. `JUDGE_PROVIDER=none`에서도 끝까지 동작해야 함. 근거 부족이면 "자료에서 확인 불가"
-   - 1-c 판정기(Jev): 받은 키가 TypeSafe 직접 / Cloudflare 중 어느 경로인지 먼저 사용자 확인. `.env`의 JEV_ENABLED·JEV_MODEL·JEV_TIMEOUT_SECONDS를 config에 반영(값은 코드·로그에 출력 금지), 모델 이름은 공식 문서로 확인(추측 금지), D-007 갱신
-   - 주의: 키워드 검색(Kiwi / BGE-M3 sparse)은 리랭커로 c01·c09가 안 풀릴 때 검토. 표 뭉침 청크(p268)는 "막힌 것"에 기록만 했으니 이번에 손대지 않음
+- (완료 2026-09-30) 1-a 리랭커 비교 — `BAAI/bge-reranker-v2-m3` 채택, N=10, "확인 불가" 2단계 잠정값(0.45 / 0.15). 결과는 "자체 평가 메모"와 D-024
+1. **[다음 세션] 질의 흐름 + 판정기(Jev)**
+   - 1-b 질의 흐름: 검색(벡터 N=10 → 리랭커 → K=5) → `is_answerable`(1단계 벡터 하한 → 2단계 리랭커 임계값) → 답변 생성(근거 번호 인용, 프롬프트는 `backend/app/prompts/` 텍스트 파일, Gemini 재시도·폴백 D-010) → 근거 일치 판정. `JUDGE_PROVIDER=none`에서도 끝까지 동작해야 함. 근거 부족이면 "자료에서 확인 불가"
+     - 속도: 질문당 리랭크 평균 6초가 답변 지연에 더해짐 → API는 단계별 시간 기록, 화면에 진행 표시. 서버에서는 임베딩+리랭커 두 모델이 동시에 올라감(RAM 약 5GB 예상, 실제 측정 필요)
+   - 1-c 판정기(Jev): 받은 키가 TypeSafe 직접 / Cloudflare 중 어느 경로인지 먼저 사용자 확인. `.env`의 JEV_ENABLED·JEV_MODEL·JEV_TIMEOUT_SECONDS를 config에 반영(값은 코드·로그에 출력 금지), 모델 이름은 공식 문서로 확인(추측 금지), D-007 갱신. can_answer를 리랭커 임계값 근처(예: 0.15 주변) 구간에만 쓸지 검토
+   - 주의: 리랭커 점수가 낮게 나오는 표·수식 뭉침 청크(c06 p245~247, c09 p339는 이미 차단, c07 p268은 0.208로 경계)는 "확인 불가"로 빠질 수 있음 → 표 청킹 개선은 "막힌 것"에 기록, 이번에 손대지 않음. 키워드 검색(Kiwi / BGE-M3 sparse)은 보류(리랭커로 c01·c09 순위는 풀림)
 2. 간단한 프론트로 실사용 — 최소 화면, 질의 흐름 바로 뒤(공부 화면 B 중심 + 검수 탭 최소: 답변 피드백, 보충·수정 목록)
 3. 이론 보충·수정 (ARCHITECTURE "이론 보충·수정", material_type user_supplement·mingyu_app.chunk_corrections 마이그레이션은 사용자 확인 후)
 4. 팀 텍스트 품질 비교: 몇 쪽(1과목 14쪽, 3과목 226쪽 등)을 팀 텍스트 / PaddleOCR mobile / Gemini 비전으로 뽑아 원본 이미지와 비교(정확도·누락·표/수식 처리, 속도·비용). 기존 "PaddleOCR 실제 교재 품질 측정"을 대체
@@ -43,6 +41,8 @@
 - 틈틈이: 재처리 API(FAILED/REVIEW_REQUIRED/멈춘 페이지), 자료 삭제 시 저장 파일 정리, (사용자) S3 팀 버킷 유무 문의
 
 ## 막힌 것 / 확인 필요
+- 리랭커 점수가 낮은 정답 청크(D-024): c06(p245~247 시계열 정상화)·c09(p339 향상도 공식 표)는 정답이 1위여도 리랭커 1위 점수 0.04~0.07이라 2단계 임계값 0.15에서 "확인 불가"가 됨. 표·수식이 한 줄로 뭉친 청크가 원인으로 보임(아래 p268과 같은 문제). 임계값은 33문항 기준 잠정값 → 실사용 질문으로 다시 재야 함
+- 리랭크 속도: CPU에서 질문당 평균 6초·최대 10초(N=10). ONNX 백엔드 등은 필요해지면 검토
 - 표가 한 줄로 뭉친 청크: 3과목 p268 "오분류표를 활용한 평가지표" 표가 계산식·지표명·설명이 섞인 한 덩어리 텍스트라(팀 텍스트 원문 형태) 검색 순위가 낮음(c07). 표 청킹 방식(행 단위 분리 등)은 미정, 기록만
 - 3과목 216쪽은 원본 PDF·팀 텍스트 모두 없음(D-018). 필요하면 교재에서 직접 캡처해 업로드 경로로 추가
 - 받은 Jev 키가 TypeSafe 직접 API용인지 Cloudflare Workers AI용인지 미확인
@@ -80,6 +80,14 @@
       - 질문 표현(용어 중의성) 3: c01(4위, "군집추출"이 계층적 군집 p320~322로 끌림), c02(3위, "5단계"·"매우 불만~매우 만족"이 디자인 씽킹 5단계·STRESS 적합도 표로 끌림), c09(2위, "lift"가 향상도 곡선 p274로 끌림). 키워드 검색·리랭커로 개선 여지
       - 청킹 문제 1: c07(3위, 1위 p271은 민감도·특이도 정의만 있고 recall 언급이 없어 D-023 기준으로 정답 아님). recall=sensitivity 답이 있는 p268 평가지표 표가 한 줄로 뭉친 청크라 상위 5에 못 듦("막힌 것" 참고)
     - HTML 보고서: `data/reports/eval/20260930-195048.html`
+  - **2026-09-30 리랭커 비교 / BGE-M3 + 리랭커, 키워드 없음, K=5 / 같은 33문항 (D-024에 전체 표)**
+    - 벡터만: hit@1 21/26(81%), hit@3 25, hit@5 26, MRR 0.881 / 과목별 hit@1 7/8·8/8·6/10
+    - `BAAI/bge-reranker-v2-m3` N=10 embedding_text(**채택**): hit@1 22/26(85%), hit@3 26, hit@5 26, MRR 0.917 / 과목별 hit@1 6/8·7/8·9/10 / 리랭크 평균 6.0초·최대 10.2초. N=20: hit@1 22·hit@5 25·MRR 0.910·12.6/20.1초, N=30: 같은 순위·14.6/26.9초, clean_text(N=20): hit@1 21·MRR 0.886
+    - `dragonkue/bge-reranker-v2-m3-ko` N=20 embedding_text: hit@1 24/26(92%), hit@3·5 26, MRR 0.962 / 과목별 6/8·8/8·10/10 / 10.3·18.1초. clean_text: hit@1 23, MRR 0.929
+    - 순위 변화(벡터 → v2-m3 N=10 / -ko N=20): c01 4→1/1, c02 3→1/1, c09 2→1/1, c07 3→1/1, a06 2→2/2(p45가 계속 1위). 나빠진 것(v2-m3): a02·b02 1→2, c06 1→3
+    - 리랭커 1위 점수 분포: v2-m3 N=10 답 가능 0.043~0.993(중앙 0.732) / 자료 없음 0.000~0.131(n08 0.131, 나머지 ≤0.005) → 거의 분리. N=20/30은 n08이 0.622(벡터 13위 DBSCAN 청크)라 겹침. -ko는 답 가능 최저 0.000(정답 1위인데 <0.01인 질문 6개) / 자료 없음 최고 0.512 → 겹쳐서 임계값에 못 씀
+    - 2단계 잠정값(v2-m3 N=10): 벡터 하한 0.45 + 리랭커 0.15 → 답 가능 24/26 통과(c06 0.043·c09 0.066 차단), 자료 없음 7/7 차단. 벡터 1위 점수만 쓸 때(0.55: 22/26 통과·6/7 차단)보다 나음
+    - HTML 보고서: `data/reports/eval/20260930-205236.html`(채택 설정, 리랭크 전 벡터 순위 함께 표시)
 
 ## 완료 기록
 - 2026-09-29: 저장소 초기 구조, uv 환경, GitHub 연결, 운영 문서 5종, Gemini 모델 확인
@@ -93,3 +101,4 @@
 - 2026-09-30: 설계 보완(코드 변경 없음) — 팀 방향 변경(D-021, 공용 프론트 없음), 이론 보충·수정 설계, 검색 단계 리랭커·키워드 후보(미검증), 검색 평가 세트 형식, 다음 작업 순서 재조정(텍스트 end-to-end 우선). 전체 임베딩은 세션 종료 시점 실행 중
 - 2026-09-30: 전체 임베딩 완료 확인(324쪽 EMBEDDED, 검색 가능 605), 실행 중단 시 run FAILED로 닫기, 검색 평가 스크립트(hit@K·MRR·임계값별 통과/차단) + 예시 6문항 검증, /start에서 RUNNING run은 "실행 중일 수 있음"으로 보고 (테스트 75+2개)
 - 2026-09-30: 검색 평가 실행 — 질문 세트 33문항(Claude 초안, 경계 사례 3 포함), 평가 HTML 보고서(썸네일), 결과 기록(hit@5 100%, hit@1 81%, 확인 불가 임계값은 미확정), 다음 작업 순서 조정(질의 흐름 → 최소 화면 → 이론 보충·수정), 정답 쪽 기준(D-023)·"확인 불가" 2단계 판단 설계 (테스트 77+2개)
+- 2026-09-30: 리랭커 비교 — `rerank.py`(CrossEncoder), 검색·평가에 리랭크 단계(`--reranker/--n/--rerank-input`, 리랭커 점수 임계값·2단계 표·리랭크 시간), 3개 설정 × N·입력 비교 → `BAAI/bge-reranker-v2-m3` N=10 채택, "확인 불가" 2단계 잠정값 0.45/0.15 (D-024, 테스트 82+3개)

@@ -206,6 +206,8 @@ def _kind(q: dict, k: int) -> str:
 
 def _card(q: dict, k: int, kind: str) -> str:
     score = f"{q['top_score']:.3f}" if q["top_score"] is not None else "-"
+    if q.get("rerank_top_score") is not None:  # 리랭커 평가: 벡터 1위 점수 + 리랭커 1위 점수
+        score = f"벡터 {score} / 리랭커 {q['rerank_top_score']:.3f}"
     if kind == "none":
         badge = f'<span class="badge none">자료에 없음 · 1위 {score}</span>'
     elif kind == "hit":
@@ -221,7 +223,7 @@ def _card(q: dict, k: int, kind: str) -> str:
         )
         gold = f"<div class=gold-row>{figs}</div>"
     rows = "".join(
-        f'<tr{" class=g" if t["gold"] else ""}><td>{t["rank"]}</td><td>{t["score"]:.3f}</td>'
+        f'<tr{" class=g" if t["gold"] else ""}><td>{t["rank"]}</td><td>{t["score"]:.3f}{_vec(t)}</td>'
         f"<td>{escape(str(t['subject'] or '?'))}<br>p{escape(str(t['page']))}</td>"
         f"<td class=txt><b>{escape(t['title'] or '')}</b>\n"
         f"{escape(t['text']) if not t['missing_chunk'] else '<span class=err>(청크 없음 — 평가 후 재청킹됐을 수 있음)</span>'}</td>"
@@ -234,6 +236,13 @@ def _card(q: dict, k: int, kind: str) -> str:
         f"<div class=meta>{escape(q.get('note') or '')}</div>{gold}"
         f"<table><tr><th>순위</th><th>점수</th><th>쪽</th><th>청크</th><th>페이지</th></tr>{rows}</table></section>"
     )
+
+
+def _vec(t: dict) -> str:
+    """리랭커 평가일 때 리랭크 전 벡터 순위·점수."""
+    if "vector_rank" not in t:
+        return ""
+    return f"<br><small>벡터 {t['vector_rank']}위 {t['vector_score']:.3f}</small>"
 
 
 def _thumb(d: dict) -> str:

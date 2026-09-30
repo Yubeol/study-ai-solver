@@ -48,11 +48,25 @@ class Settings(BaseSettings):
 
     # 검색
     search_top_k: int = Field(default=5, gt=0)
+    search_candidates_n: int = Field(default=10, gt=0)  # 리랭커에 넘길 벡터 후보 수(리랭커 없으면 안 씀, D-024)
+
+    # 리랭커 (ARCHITECTURE "검색 단계 상세"). 모델 이름이 비면 리랭크 없이 벡터 순위 그대로. 캐시는 EMBEDDING_MODEL_DIR
+    reranker_model: str = ""
+    reranker_max_length: int = Field(default=1024, gt=0)  # 질문+청크 토큰 최대(넘으면 잘림)
+    reranker_batch_size: int = Field(default=8, gt=0)
+    reranker_device: str = "cpu"
+    reranker_input: Literal["embedding_text", "clean_text"] = "embedding_text"  # 청크 쪽 입력 텍스트
+
+    # "확인 불가" 2단계 판단 (ARCHITECTURE). 1단계: 벡터 1위 점수 < 하한이면 바로 확인 불가.
+    # 2단계: 리랭커 1위 점수 < 임계값이면 확인 불가(리랭커가 없으면 2단계 생략). 값은 33문항 기준 잠정값(D-024)
+    answerable_min_vector_score: float = Field(default=0.45, ge=0, le=1)
+    answerable_min_rerank_score: float = Field(default=0.15, ge=0, le=1)
 
     # 검색 평가 (ARCHITECTURE "검색 평가")
     eval_questions_path: Path = Field(default=Path("data/eval/questions.csv"))  # 상대경로면 저장소 루트 기준
     eval_rank_depth: int = Field(default=20, gt=0)  # 정답 순위를 찾을 깊이(K보다 작으면 K)
     eval_thresholds: str = "0.40,0.45,0.50,0.55,0.60"  # "확인 불가" 1위 점수 임계값 후보(쉼표 구분)
+    eval_rerank_thresholds: str = "0.01,0.05,0.1,0.15,0.2,0.3,0.5,0.7"  # 리랭커 1위 점수 임계값 후보
     eval_report_thumb_width: int = Field(default=320, gt=0)  # HTML 보고서 페이지 썸네일 가로 픽셀
     eval_report_text_chars: int = Field(default=200, gt=0)  # HTML 보고서에 보일 청크 텍스트 앞부분 글자 수
 
@@ -134,7 +148,15 @@ class Settings(BaseSettings):
 
     @property
     def eval_threshold_list(self) -> list[float]:
-        return [float(x) for x in self.eval_thresholds.split(",") if x.strip()]
+        return _floats(self.eval_thresholds)
+
+    @property
+    def eval_rerank_threshold_list(self) -> list[float]:
+        return _floats(self.eval_rerank_thresholds)
+
+
+def _floats(s: str) -> list[float]:
+    return [float(x) for x in s.split(",") if x.strip()]
 
 
 def _from_root(p: Path) -> Path:
