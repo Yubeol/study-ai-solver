@@ -1,6 +1,6 @@
 # PROGRESS
 
-## 현재 상태 (2026-09-29 세션 종료 기준)
+## 현재 상태 (2026-09-30 세션 종료 기준, 이번 세션은 docs만 변경)
 - 환경·문서: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
   - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`(C 여유 부족). 새 터미널부터 적용
 - 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev 키는 사용자가 .env에 넣음(TYPESAFE_API_KEY, JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS — 코드에서는 아직 안 씀, 값 미확인). S3 미확인 → STORAGE_BACKEND=local
@@ -14,31 +14,28 @@
 - 테스트: `uv run pytest` 43개 통과(가짜 OCR 엔진), `uv run pytest -m ocr_model` 1개 통과(실제 모델, 맑은 고딕 없으면 skip)
 - 프론트엔드: 미생성
 
-## 다음 작업
-1. **[다음 세션] 실제 교재로 OCR 확인 → 4-2. detect_visuals**
-   - 0) 먼저 실제 교재 스캔 2~3장(`data/`에 둔 것)을 업로드해서 OCR 품질·속도 확인
-      - 서버 실행 후 `POST /books`(material_type=textbook) → `POST /books/{id}/pages` → `GET /processing-runs/{run_id}` → 저장소 `data/storage/books/{book_id}/{page_id}.ocr.json` 확인
-      - 확인할 것: 줄 누락, 표·그림 안 글자, 수식, 페이지당 시간. 결과를 DECISIONS D-013 실측에 추가
-      - 품질이 많이 나쁘면 4-2로 가지 말고 사용자와 Gemini 추출 전환 여부를 먼저 정한다
-   - 4-2 할 일
-     1. 기울기 보정: OCR bbox 또는 OpenCV(Hough/minAreaRect)로 각도 추정. 원본 바이트는 바꾸지 않고, 보정 결과가 필요하면 별도 저장
-     2. 시각자료 영역 검출·crop: 그림/표/도식 영역을 찾아 `ctx.storage.save("books/{book_id}/{page_id}/visual_{n}.png", ...)` → URI를 visual_assets.crop_s3_uri(NOT NULL)에. visual_type CHECK 값은 DB에서 먼저 확인
-     3. 세트 그림 묶기(visual_groups), 표 구조화(visual_tables)는 범위가 크면 이번에는 crop까지만 하고 나머지는 다음으로 미룬다(사용자와 범위 확정)
-     4. OCR 줄 중 시각자료 영역 안에 있는 줄 표시(4-3 청킹에서 본문과 분리하기 위함) → ocr.json 또는 page_metadata에 기록
-   - 관련 파일: `backend/app/ingestion/stages.py`(detect_visuals), `images.py`(decode_bgr), `ocr.py`(OcrLine bbox), `pipeline.py`(detect_visuals 뒤 chunk_theory가 VERIFIED를 설정), `app/storage/`, `backend/tests/test_ingestion_api.py`(_FakeEngine, NOOP_STAGES)
-   - 주의
-     - 시각자료 테이블 적재 시 processing_run_id(001에서 추가)도 채운다. 기존 컬럼 변경 금지, 필요하면 컬럼 추가만(마이그레이션 → 사용자 확인)
-     - OpenCV 파일 입출력은 imdecode/imencode만(한글 경로)
-     - 테스트 이미지는 코드로 생성(Pillow 도형 + 맑은 고딕), 교재 이미지는 커밋 금지
-     - detect_visuals를 구현하면 페이지는 chunk_theory(미구현)에서 멈추므로 상태는 여전히 EXTRACTED — 테스트 기대값 확인
-2. 4-3. chunk_theory: 청킹(sort_order), 수식, 제외 영역(excluded_sections), 품질 판정(`NeedsReview`) → theory_chunks 적재(raw_text는 OCR 원문 그대로)
-3. 4-4. embed: 시각자료 설명문(Gemini, 재시도·폴백 D-010) + BGE-M3 임베딩
-4. 재처리 API(FAILED/REVIEW_REQUIRED/미구현 단계에서 멈춘 페이지/서버 재시작으로 중단된 페이지), 자료 삭제 시 저장 파일(원본, ocr.json, crop) 정리
-5. 손필기(personal_note) 비전 LLM 추출 (D-008)
-6. Jev 연동: .env에 키 들어옴 → 새 키 이름(JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS)을 config에 반영, REST 호출 테스트, D-007 갱신. 모델 이름은 공식 문서로 확인(추측 금지)
-7. (사용자) S3: 팀 버킷 유무 문의
+## 다음 작업 (2026-09-30 재정리)
+설계는 ARCHITECTURE의 "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-017 참고.
+1. **[다음 세션] 팀 교재 데이터 반입** (D-014)
+   - 파일명 정리: `pdf/1과목.pdf`→`subject1.pdf` 등, `team_text/과1~과3`→`subject1~3/`, 깨진 텍스트 파일명에서 인쇄 페이지 번호 추출
+   - PDF 장 ↔ 인쇄 페이지 매핑 실제 확인(1·3과목은 PDF가 1장 많음, 3과목 94~96장 = 226~228쪽). 매핑 파일을 만들어 사용자에게 보여준다
+   - books/pages 생성(printed_page_number, page_metadata.pdf_index), 팀 텍스트를 extract_text 결과로 저장(engine="team_text", 출처 파일명)
+   - **DB 적재는 매핑·계획을 사용자에게 확인받은 뒤**
+   - 주의: PDF 렌더링 라이브러리가 필요하면 공식 자료로 확인 후 `uv add`, DECISIONS에 기록. 교재 이미지·텍스트는 커밋 금지
+2. 청킹 + 로컬 임베딩(BGE-M3) → 검색 동작 확인 (머리말/쪽번호 제외, 기출 표시 → exam_clues, raw_text 원문 그대로)
+3. 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽) (D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터)
+4. 그래프 포함 문제 10개로 추출 정확도 확인 (비전 LLM 텍스트화, D-015)
+5. crop 전체 확장 + 시각자료 설명문 생성 (Gemini, 재시도·폴백 D-010)
+6. 질의 흐름 + Jev 호출 테스트 — Jev 키는 받았으나 **어느 경로(TypeSafe 직접 / Cloudflare) 키인지 확인 필요**. 새 키 이름(JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS)을 config에 반영, 모델 이름은 공식 문서로 확인(추측 금지), D-007 갱신
+7. 오답노트 구현 (D-017, mingyu_app 마이그레이션은 사용자 확인 후)
+8. PaddleOCR(새 캡처용) 실제 교재 품질·속도 측정, 손필기(personal_note) 비전 LLM 추출
+9. 프론트 화면 3개 + 검수 탭
+- 틈틈이: 재처리 API(FAILED/REVIEW_REQUIRED/멈춘 페이지), 자료 삭제 시 저장 파일 정리, (사용자) S3 팀 버킷 유무 문의
 
 ## 막힌 것 / 확인 필요
+- 팀 텍스트 파일 수가 표기 범위와 1개씩 어긋남: 1과목 14~63p(50쪽)인데 49개, 3과목 132~342p(211쪽)인데 210개 → 빠진 쪽이 있는지 반입 세션에서 확인
+- 받은 Jev 키가 TypeSafe 직접 API용인지 Cloudflare Workers AI용인지 미확인
+- 레이아웃 분석 모델(PaddleOCR 계열)의 Windows + CPU 동작 여부 미확인 (D-016)
 - S3 사용 가능 여부 미확인 (pages.source_s3_uri, visual_assets.crop_s3_uri가 NOT NULL)
 - Jev Cloudflare 경로의 무료 할당량 적용 여부 미확인
 - gemini-3.7-flash는 503(일시적 과부하)만 확인, 정상 응답은 아직 못 받음
@@ -67,3 +64,4 @@
 - 2026-09-29: 기반 작업 — 마이그레이션 001/002 적용, FastAPI 골격, 설정 로딩, DB 연결, 스키마 고정 테스트
 - 2026-09-29: 업로드·처리 파이프라인 뼈대 — books/업로드/상태 API, local 저장소, 단계별 상태 갱신 골격 (테스트 35개 통과, push 완료)
 - 2026-09-29: 4-1 extract_text — PaddleOCR 설치(모델 캐시 E:, uv 캐시 E:), 인쇄체 OCR·결과 저장, 미구현 단계는 EXTRACTED에서 멈춤, 손필기 REVIEW_REQUIRED (테스트 43+1개 통과)
+- 2026-09-30: 설계 문서 보완(코드 변경 없음) — 오답노트·품질 검수 도구·시각자료 표시 원칙, 팀 교재 데이터 반입 경로, 3과목 crop 계획, 다음 작업 순서 재정리 (D-014~D-017)

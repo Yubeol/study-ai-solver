@@ -82,3 +82,25 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 동시성: 추론 객체의 스레드 안전성이 문서에 없어 엔진 1개 + 잠금으로 직렬화(BackgroundTasks 스레드풀 대비).
 - 저장: 줄 단위 전체 결과(text, confidence, bbox)는 저장소 `books/{book_id}/{page_id}.ocr.json`, `page_metadata.ocr`에는 요약(uri, 줄 수, 평균 신뢰도, 엔진·버전·모델). theory_chunks는 4-3에서 만든다. 손필기(personal_note)는 비전 LLM 구현 전까지 REVIEW_REQUIRED("손필기 추출 미구현").
 - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`로 옮김(C 여유 공간 부족).
+
+## D-014 팀 교재 3권은 팀 텍스트를 추출 결과로 쓰고, PaddleOCR은 새 캡처용으로 미룸 (2026-09-30)
+- 팀 교재 PDF(1과목 50장, 2과목 64장, 3과목 211장)는 휴대폰 촬영 스캔이라 기울기·휨·그림자가 있고 텍스트 레이어가 없다. 팀원이 추출한 페이지별 텍스트가 이미 있으므로 이를 extract_text 결과로 저장하고 출처(engine="team_text", 원본 파일명)를 표시한다.
+- D-008(인쇄체는 PaddleOCR)을 이 세 권에 한해 대체한다. PaddleOCR 경로는 새로 업로드하는 캡처용으로 남겨 두고 작업 순서만 뒤로 미룬다.
+- 팀 텍스트에는 줄 bbox가 없으므로 청크 출처는 페이지 단위로만 표시한다. raw_text는 팀 텍스트 원문 그대로(교정 금지), 머리말/쪽번호 줄만 청킹에서 제외, 기출 표시는 exam_clues로 옮긴다.
+- PDF 장 ↔ 인쇄 페이지 매핑은 반입 세션에서 실제 대조 후 확정(현재 확인된 것: 3과목 PDF 94~96장 = 226~228쪽). DB 적재는 매핑을 사용자에게 확인받은 뒤.
+
+## D-015 시각자료는 다시 그리지 않고 원본 crop + 설명문으로 표시, 문제 속 그래프는 텍스트화 (2026-09-30)
+- 재구성한 그래프는 원본과 달라질 위험이 있어(환각) 화면에는 원본 crop 이미지와 설명문만 보여준다.
+- Jev는 텍스트/JSON만 입력 가능(D-007)하므로 문제 속 그래프·표는 비전 LLM(Gemini)이 텍스트로 풀어낸 뒤 그 텍스트로 검색·판정한다.
+
+## D-016 시각자료 crop: 보정 → 레이아웃 검출 → 캡션 기준 그룹핑, Gemini에는 crop만 (2026-09-30)
+- 순서: OpenCV 원근·조명 보정 → 레이아웃 분석 모델로 그림/표/수식/캡션 검출 → 캡션(그림 아래 `<...>`, 꺾쇠 없는 경우 포함) 기준 그룹핑·여백 확장 crop → 표는 visual_tables, 그림은 visual_assets.
+- 비용·무료 한도(D-010)를 아끼기 위해 Gemini에는 페이지 전체가 아니라 crop + 관련 이론 문장 2~5개만 보낸다. 검출이 애매한 페이지만 영역 좌표 보조 요청.
+- 레이아웃 모델(PaddleOCR 계열 레이아웃 기능)의 Windows + CPU 동작 여부는 **미확인** → 구현 세션에서 공식 문서로 확인하고 출처·날짜를 이 항목에 추가한다. 안 되면 OpenCV 규칙 기반으로 대체.
+- 3과목 224~230쪽 시범 → 검수 HTML 보고서로 확인 → 전체 확장.
+
+## D-017 오답노트: 내 답·내 이유 비교, 틀린 유형 4종, 판정기 역할 2개 추가 (2026-09-30)
+- 틀린 유형: concept_confusion(개념 혼동) / misread(문제 오독) / calculation(계산 실수) / memorization(암기 부족).
+- 판정기 인터페이스에 `reason_match`(내 이유가 근거와 일치?), `error_type`(틀린 유형 선택)을 추가한다. JUDGE_PROVIDER=none이면 LLM 구조화 출력으로 대신하거나 비워 두고, 흐름은 끝까지 간다.
+- 개념 혼동 설명에는 theory_chunks.confusable_concepts와 concept_relations(compare)를 쓴다.
+- 테이블은 mingyu_app에 wrong_notes / wrong_note_evidence / wrong_note_attempts로 설계만 해 두고(ARCHITECTURE "오답노트"), 마이그레이션은 구현 세션에서 사용자 확인 후 적용한다. judgments.question_key CHECK도 그때 새 마이그레이션으로 확장한다.

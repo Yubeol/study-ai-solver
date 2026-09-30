@@ -71,6 +71,13 @@ adsp-study-rag/
 - solution_evidence: source_schema, source_kind(theory/visual/table/formula), source_id, rank(solution별 UNIQUE), score, quoted_text(스냅샷)
 - judgments: solution_id/problem_id, provider, question_key(can_answer/classify/choose/verify), answer(JSONB), confidence, latency, cost
 - 요약 로그는 팀 규격 query_logs에도 기록한다.
+- (설계만, 미적용) 오답노트용 wrong_notes / wrong_note_evidence / wrong_note_attempts → 아래 "오답노트" 절
+
+### 설계에 쓰는 기존 컬럼 메모 (2026-09-30 DB에서 확인)
+- `theory_chunks.exam_clues`, `theory_chunks.confusable_concepts`는 JSONB 컬럼(별도 테이블 아님)
+- `pages.printed_page_number`: 인쇄 쪽번호 (팀 교재 반입 시 채움)
+- `concept_relations.relation_type` CHECK: parent / child / synonym / compare / related
+- `v_review_queue`: pages 중 `review_required = true OR quality_passed = false` (청크·시각자료 단위 검수 대상은 포함하지 않음)
 
 ## 자료 적재 흐름 (업로드 → 백그라운드 처리)
 업로드 API가 파일을 저장소(local 또는 S3)에 저장하고 pages 행과 processing_runs 1건을 만든 뒤 백그라운드 작업(FastAPI BackgroundTasks)을 시작한다.
@@ -89,14 +96,43 @@ adsp-study-rag/
 - 단계 목록은 `app.state.pipeline_stages`로 주입(테스트에서 가짜 단계 사용)
 
 ### 목표 단계
-1. 텍스트 추출: 교재·강의노트(인쇄체) → PaddleOCR / 개인노트(손필기) → 비전 LLM
-2. 기울기 보정, 시각자료 자동 crop(OpenCV/Pillow), 세트 그림 묶기(visual_groups), 표 구조화
+1. 텍스트 추출: 교재·강의노트(인쇄체) → PaddleOCR / 개인노트(손필기) → 비전 LLM / 팀 교재 3권 → 팀 텍스트 반입(아래)
+2. 원근·조명 보정, 시각자료 자동 crop(아래 "시각자료 crop 파이프라인"), 세트 그림 묶기(visual_groups), 표 구조화
 3. 이론 청킹(sort_order 부여), 수식 구조화, 제외 영역(예제/기출/코드) 분리
 4. 시각자료 설명문 + embedding_text 생성: crop + 관련 이론 문장 2~5개 → GEMINI_MODEL_LITE, 품질 낮은 것만 GEMINI_MODEL_STRONG 재처리
 5. 로컬 임베딩(BGE-M3, 1024) → 저장, 링크 테이블 채우기
 
+### 팀 교재 반입 경로 (설계, 2026-09-30, D-014)
+팀 교재 3권(`data/raw/adsp/`)은 업로드 API를 거치지 않고 반입 스크립트로 넣는다. extract_text 단계만 "팀 텍스트 사용"으로 바꾸고, 이후 단계(시각자료, 청킹, 임베딩)는 업로드 경로와 같은 코드를 쓴다.
+1. 파일명 정리: PDF → `subject1~3.pdf`, 텍스트 폴더 → `subject1~3/`, 깨진 파일명에서 인쇄 페이지 번호만 뽑아 `p{번호:03d}.txt`로 정리(원본 zip/폴더는 보존)
+2. PDF 장 ↔ 인쇄 페이지 매핑 확인: PDF 장을 이미지로 렌더링하고 쪽번호(텍스트의 "… | 14" 머리말과 이미지)로 대조. 1·3과목은 PDF가 1장 많으므로 남는 장(표지·중복 촬영 등)을 찾는다. 결과는 매핑 파일(`data/raw/adsp/page_map.json` 등)로 남기고 사용자 확인
+3. books/pages 생성: 과목당 books 1행(material_type=textbook, source_name에 팀 자료 표시), PDF 장마다 pages 1행. 렌더링한 페이지 이미지를 저장소에 두고 `source_s3_uri`, `printed_page_number`를 채운다. `page_metadata`에 `pdf_index`(PDF 장 번호), `text_source="team_text"`
+4. 텍스트 저장: 팀 텍스트를 extract_text 결과로 저장(`books/{book_id}/{page_id}.text.json`, engine="team_text", 출처 파일명). OCR과 달리 줄 bbox가 없다 → 청크 `source_bbox`는 비워 두고 페이지 단위 출처만 표시
+5. 머리말/쪽번호 줄("1과목 데이터 이해 | 14")은 청킹 시 제외. "(★기출)", "5년간 출제 횟수", "학습목표"는 해당 청크의 `exam_clues`(JSONB)로 옮긴다. `raw_text`는 팀 텍스트 원문 그대로
+- DB 적재는 1~2 결과(매핑·파일 정리)를 사용자에게 보여주고 확인받은 뒤에 한다.
+- PaddleOCR 경로는 새로 업로드하는 캡처용으로 유지한다(우선순위만 뒤로).
+
+### 시각자료 crop 파이프라인 (설계, 2026-09-30, D-016)
+대상 유형(3과목에서 확인): 테두리 없는 선 그래프 세트(226쪽 λ 그래프 3개), 도식(227쪽 라쏘/릿지), 색 머리행 비교표(227쪽), 표 틀 안의 산점도 복합 그림(228쪽). 캡션은 그림 **아래**에 `<...>` 형태로 있고 팀 텍스트 3과목에 36개, 꺾쇠 없는 캡션도 있다(228쪽 "상관분석").
+1. 원근·조명 보정(OpenCV): 페이지 윤곽 검출 → 원근 변환, 그림자·조명 불균일 보정. 원본 바이트는 바꾸지 않고 보정본을 별도 저장(`books/{book_id}/{page_id}.rectified.png`)
+2. 레이아웃 분석 모델로 그림/표/수식/캡션 영역 검출. 후보는 PaddleOCR 계열 레이아웃 기능 — **Windows + CPU에서 동작하는지 공식 문서로 확인 전(미확인)**. 안 되면 OpenCV 윤곽·여백 기반 규칙으로 대체
+3. 그룹핑·crop: 캡션 기준으로 위쪽 그림 영역을 묶고(세트 그림은 visual_groups), 제목·캡션을 포함하도록 여백을 확장해 crop. 검출 bbox는 `source_bbox`, 확장 bbox는 `expanded_crop_bbox`
+4. 저장: 표 → visual_tables, 그림 → visual_assets(visual_type CHECK: graph/diagram/flowchart/tree/network/venn/matrix/plot/image/multi_panel/other). crop 이미지 URI → `crop_s3_uri`
+5. 설명문: Gemini에는 **crop 이미지 + 관련 이론 문장 2~5개만** 보낸다(페이지 전체 전송 안 함). 검출이 애매한 페이지만 Gemini에 영역 좌표 보조 요청
+6. 시범 구간: 3과목 224~230쪽을 먼저 돌려 검수 보고서로 확인한 뒤 전체로 확장
+
+### 품질 검수 도구 (설계, 2026-09-30)
+- 1단계: 정적 HTML 보고서(스크립트로 생성, `data/reports/` 아래, gitignore). 페이지마다
+  - 원본(또는 보정본) 이미지 위에 crop 영역·텍스트 영역 bbox를 색으로 구분해 그림
+  - 옆에 crop 이미지 / 추출 텍스트 / 설명문을 나란히 배치, 검출 신뢰도·review_reasons 표시
+  - 교재 이미지가 들어가므로 외부 공유 금지(개인 확인용)
+- 2단계: 관리 화면(C)의 검수 탭으로 확장. 대상 목록은 `v_review_queue`(pages 중 review_required 또는 quality_passed=false) + needs_review인 theory_chunks/visual_assets. 승인/수정 시 needs_review를 풀고 재임베딩
+
+### 시각자료 표시 원칙 (D-015)
+- 화면에서는 그래프를 다시 그리지 않는다. 근거가 시각자료이면 **원본 crop 이미지 + 설명문**을 보여준다(`reconstructability` 등 구조 JSONB는 검색·설명용).
+
 ## 질의 흐름
-1. 입력: 질문 텍스트 또는 문제 이미지(비전 LLM으로 문제문·보기·수식 추출)
+1. 입력: 질문 텍스트 또는 문제 이미지(비전 LLM으로 문제문·보기·수식 추출). 문제 속 그래프·표는 비전 LLM이 텍스트(축, 추세, 수치, 보기와의 관계)로 풀어내고, 이후 검색·판정은 이 텍스트로 한다(Jev는 이미지 입력 불가)
 2. 검색: 선택 과목 범위에서 하이브리드 검색(벡터 + trgm), 이론 → 연결된 시각자료·같은 페이지 표/수식 확장
 3. 답변 가능 판정(판정기): 근거로 답할 수 없으면 LLM 호출 없이 "자료에서 확인 불가"
 4. 답변 생성: 기본 시험모드 + 선택한 제약 프리셋, 근거 번호 인용 강제
@@ -105,10 +141,32 @@ adsp-study-rag/
 
 ## 판정기 (교체 가능 모듈)
 - 인터페이스: `can_answer`(근거로 답 가능?), `classify`(단원·유형 선택), `choose`(객관식 후보), `verify`(답이 근거와 일치?)
+  - 오답노트용 추가(설계): `reason_match`(내 이유가 근거와 일치?, 예/아니오 + 신뢰도), `error_type`(틀린 유형 선택: concept_confusion / misread / calculation / memorization)
 - 구현체: `jev_typesafe`, `jev_cloudflare`, `llm`(Gemini 구조화 출력), `none`(판정 생략)
 - `JUDGE_PROVIDER`로 선택. 신뢰도 임계값은 제공자별로 따로 둔다.
+- `none`일 때 오답노트는 LLM 설명만 저장하고 틀린 유형은 LLM 구조화 출력 값(또는 비워 둠)을 쓴다. 판정 없이도 흐름은 끝까지 간다.
+- `mingyu_app.judgments.question_key` CHECK는 현재 4개 값 → 오답노트 구현 시 새 마이그레이션으로 `reason_match`, `error_type` 추가(내 스키마이므로 제약 교체 가능)
+
+## 오답노트 (설계, 2026-09-30, D-017 — 마이그레이션은 구현 세션에서)
+### 흐름
+1. 입력: 문제(텍스트 또는 사진) + **내 답** + **내 이유**(자유 서술)
+2. 문제 추출(사진이면 비전 LLM, 그래프 포함 시 텍스트화) → 근거 검색 → 정답 풀이(기존 질의 흐름, 근거 인용)
+3. 비교: 내 이유 ↔ 근거 문장. `reason_match` 판정 + LLM이 "어느 근거 문장과 어긋나는지"를 근거 번호로 설명
+4. 틀린 유형 분류(`error_type`): 개념 혼동 / 문제 오독 / 계산 실수 / 암기 부족
+   - 개념 혼동이면 근거 청크의 `confusable_concepts`(theory_chunks JSONB)와 `concept_relations`(relation_type='compare')에서 헷갈린 상대 개념을 찾아 함께 보여준다
+5. 오답노트 저장
+6. 재질문: 같은 개념(concept_id / 근거 청크)으로 새 문제를 LLM이 생성(근거 청크만 사용) → 풀면 결과를 시도 기록에 남긴다
+- 내 답이 정답이어도 이유가 근거와 어긋나면 "정답이지만 이유 불일치"로 기록한다.
+
+### mingyu_app 테이블 (초안)
+- `wrong_notes`: id, problem_id(→ problems), solution_id(→ solutions, SET NULL), subject, my_answer, my_reason, correct_answer, is_correct, reason_match(boolean NULL), reason_match_confidence, error_type(CHECK concept_confusion/misread/calculation/memorization, NULL 허용), mismatch_explanation(어디서 틀렸는지), confused_with(JSONB: 개념 이름·concept_id 목록), concept_ids(JSONB 또는 uuid[]), status(CHECK open/reviewing/resolved), created_at, updated_at
+- `wrong_note_evidence`: wrong_note_id, source_kind(theory/visual/table/formula), source_id, role(CHECK correct_basis/my_reason_conflict), quoted_text(스냅샷)
+  - solution_evidence와 겹치면 solution_evidence 참조만 하고 이 테이블은 role 표시용으로만 쓸지 구현 시 결정
+- `wrong_note_attempts`: wrong_note_id, question_text(재질문 문제), generated_from(JSONB: 근거 청크 id), my_answer, is_correct, created_at
+- 판정 기록은 기존 `judgments`(question_key 추가)에 남기고 wrong_note_id로 연결(컬럼 추가)
+- 팀 규격 테이블은 변경하지 않는다.
 
 ## 화면 (React + Vite)
 - A. 자료 업로드: 과목 선택/생성, 자료 유형, 다중 업로드, 처리 상태
-- B. 공부: 과목, 질문 또는 문제 사진, 제약 프리셋, 답변 + 근거 청크 + 출처
-- C. 관리: 과목·자료 목록, 삭제/재임베딩, 사용 로그
+- B. 공부: 과목, 질문 또는 문제 사진, 제약 프리셋, 답변 + 근거 청크 + 출처(시각자료 근거는 원본 crop 이미지 + 설명문). 오답 입력(내 답·내 이유) 모드, 오답노트 목록·재질문
+- C. 관리: 과목·자료 목록, 삭제/재임베딩, 사용 로그, 검수 탭(v_review_queue 기반, 위 "품질 검수 도구" 2단계)
