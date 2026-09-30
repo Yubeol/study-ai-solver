@@ -132,3 +132,32 @@ def set_status(
         "WHERE id = %s"
     ).format(s=sql.Identifier(settings.db_schema))
     conn.execute(q, (status, status, status, status, Jsonb(info), page_id))
+
+
+def get_chunk_input(conn: psycopg.Connection, settings: Settings, page_id: UUID) -> dict | None:
+    """청킹에 필요한 값: 쪽번호, 업로드 순서, 추출 결과 위치(page_metadata.text / .ocr)."""
+    q = sql.SQL(
+        "SELECT book_id, printed_page_number, (page_metadata->>'upload_index')::int AS upload_index, "
+        "page_metadata->'text' AS text, page_metadata->'ocr' AS ocr FROM {s}.pages WHERE id = %s"
+    ).format(s=sql.Identifier(settings.db_schema))
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(q, (page_id,)).fetchone()
+
+
+def get_previous_chunk_state(
+    conn: psycopg.Connection, settings: Settings, book_id: UUID, upload_index: int | None
+) -> tuple[bool, dict | None]:
+    """같은 자료에서 바로 앞 페이지(upload_index 기준)의 청킹 종료 상태.
+
+    (앞 페이지가 있는지, 그 페이지의 page_metadata.chunking.end_state)를 돌려준다.
+    앞 페이지가 아직 청킹되지 않았으면 (True, None).
+    """
+    if upload_index is None:
+        return False, None
+    q = sql.SQL(
+        "SELECT page_metadata->'chunking'->'end_state' FROM {s}.pages "
+        "WHERE book_id = %s AND (page_metadata->>'upload_index')::int < %s "
+        "ORDER BY (page_metadata->>'upload_index')::int DESC LIMIT 1"
+    ).format(s=sql.Identifier(settings.db_schema))
+    row = conn.execute(q, (book_id, upload_index)).fetchone()
+    return (row is not None), (row[0] if row else None)

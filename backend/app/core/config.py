@@ -73,6 +73,15 @@ class Settings(BaseSettings):
     team_import_preview_dpi: int = Field(default=14, gt=0)  # 쪽번호 대조용 저해상도 미리보기
     reports_dir: Path = Field(default=Path("data/reports"))  # dry-run 계획·미리보기 출력
 
+    # 이론 청킹 (D-019). 글자 수 기준(공백 포함). 청크는 페이지를 넘지 않는다.
+    chunk_max_chars: int = Field(default=800, gt=0)  # 청크 clean_text 최대 길이(문단 하나가 더 길면 자르지 않음)
+    chunk_overlap_chars: int = Field(default=120, ge=0)  # 긴 절을 나눌 때 앞 조각 끝 문단을 이만큼까지 다시 넣음
+    chunk_min_chars: int = Field(default=80, ge=0)  # 이보다 짧은 끝 조각은 앞 조각에 합침
+    chunk_heading_max_chars: int = Field(default=60, gt=0)  # 번호가 있어도 이보다 긴 줄은 제목이 아닌 본문
+    # clean_text가 review_max_chars보다 짧고 본문 한글 비율이 이보다 낮으면 needs_review=true(검색 제외)
+    chunk_review_max_chars: int = Field(default=80, ge=0)
+    chunk_review_min_hangul_ratio: float = Field(default=0.3, ge=0, le=1)
+
     @field_validator("ocr_model_dir", mode="before")
     @classmethod
     def _empty_path_is_none(cls, v):

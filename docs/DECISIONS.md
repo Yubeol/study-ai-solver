@@ -125,3 +125,24 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 누락 쪽(3과목 216쪽): pages 행을 만들지 않는다. books·processing_runs에 메모 컬럼이 없으므로 반입 리포트(`data/reports/team_import/apply_{key}.json`의 missing_printed)와 다음 쪽(217쪽) `page_metadata.missing_before`에 남긴다. `과3-216-217p.txt`는 217쪽으로 매핑하고 `text.note`에 파일명과 내용이 다름을 기록.
 - 실행: `--apply`는 `--subject`(page_map key, 여러 개는 쉼표, 전체는 all) 필수. 1과목 반입 → 사용자 확인 → 2·3과목 반입 완료(2026-09-30, 3권 324페이지).
 - 반입 방식: 원본 파일명 변경·복사본 없이 page_map.json이 원본 경로를 가리킨다(D-014의 파일명 정리 단계 대체). 중복 방지는 books(subject, title, source_name) 존재 여부, 파일 저장 후 book 단위 트랜잭션(books + processing_runs 1건 + pages), 실패 시 저장 파일 삭제. EXTRACTED 페이지는 run 집계에서 미완료로 셈 → run은 PARTIAL(D-012).
+
+## D-019 이론 청킹 규칙, 원문 위치 저장 형식, 청킹 후 상태 (2026-09-30)
+- 코드: 규칙은 `backend/app/ingestion/chunking.py`(순수 함수), 단계는 `stages.chunk_theory`, 저장은 `repositories/theory_chunks.py`, 실행은 `python -m app.ingestion.run_stages`(dry-run 기본, `--apply --subject KEY|all` 또는 `--book-id`)
+- 텍스트 역할(사용자 확정)
+  - `raw_text`: 청크에 속한 원문 줄을 **줄 앞뒤 공백만 정리**해 줄바꿈으로 이은 것. 글자 교정·기호 제거 없음(기출 표시·학습목표 줄 포함). 머리말/쪽번호 줄은 어느 청크에도 넣지 않는다. "제목•본문"처럼 한 줄을 제목과 본문으로 나눈 경우에도 raw_text에는 원문 줄 한 번만 넣는다.
+  - `clean_text`: 머리말·쪽번호 줄, 학습목표·"5년간 출제 횟수" 줄, 기출 표시("(★기출)", "(★)", "(기출)", ★), 글자 없는 조각("•", "->")을 뺀 것.
+  - `embedding_text`: `장 > 절 > 항 > 세부 > ■박스` 제목 경로 + 빈 줄 + clean_text. 제목 경로는 앞 페이지(upload_index 순서)의 `page_metadata.chunking.end_state`에서 이어받는다.
+  - `title`은 경로의 마지막 제목, `sort_order`는 페이지 안 순서(0부터).
+- 머리말/쪽번호: "ADSP 한 권으로 끝내기"가 들어간 줄, `|`만 있는 줄, 그 쪽 번호 또는 "1"+쪽번호("127" = "|27", D-018), "N과목 …"(25자 이하), "N장 … |" 및 페이지 끝 4줄 안의 "N장 …".
+- 제목: "N장"+다음 줄 / "0N 절" / "N. 항" / "N) 세부" / "■ 박스". `CHUNK_HEADING_MAX_CHARS`(60) 이하이고 "다(.)"로 끝나지 않는 줄만. "3.5" 같은 수치는 제외. "N) 제목•본문"은 "•" 앞을 제목으로 본다. 장 제목 줄이 깨진 경우(1과목 3장) 꼬리말 "N장 …"의 장 번호로 보완.
+- `exam_clues`(JSONB 목록): `heading_mark`(제목의 기출 표시, 별 개수. 같은 제목 아래 다음 청크·다음 페이지에는 `inherited: true`로 붙고, 같은 수준 이상의 제목이 바뀌면 끊긴다), `exam_mark`(본문 줄의 표시), `learning_goal`, `frequency`(`items: [{topic, stars}]`).
+- 기출 문제 블록: "기출유형 개념잡기"부터 다음 제목 또는 "학습정리/용어 정리/확대경/학습목표"(앞의 `|`, `•` 무시)까지. 청크에 넣지 않고 `excluded_sections(section_type='exam_question', title='기출유형 개념잡기 [N회 출제]')`로 저장. 페이지 끝에서 끊긴 블록은 다음 쪽 첫 줄이 문제 모양([N회 출제], 정답/해설, ①~④, "번호 …?")일 때만 이어서 제외(무조건 이어받으면 2-118, 3-152, 3-221 등 이론 본문이 빠졌음).
+- 크기: 청크는 페이지를 넘지 않는다. 제목이 바뀌면 새 청크, `CHUNK_MAX_CHARS`(800) 넘으면 문단(원문 한 줄) 단위로 나누고 `CHUNK_OVERLAP_CHARS`(120)까지 겹침, `CHUNK_MIN_CHARS`(80) 미만 끝 조각은 앞 조각에 합침. 문단 하나가 더 길면 자르지 않음. 본문 없는 묶음(장·절 제목, 학습목표)은 같은 페이지 다음 묶음 앞에 붙인다.
+- 검수 표시: clean_text가 `CHUNK_REVIEW_MAX_CHARS`(80) 미만이고 제목 줄을 뺀 본문의 한글 비율이 `CHUNK_REVIEW_MIN_HANGUL_RATIO`(0.3) 미만이면 행은 만들되 `needs_review=true`, `review_reasons=["short_low_hangul"]` → `v_searchable_theory`에서 빠진다(R 출력·그림 글자 조각, 3과목 11개).
+- 원문 위치 저장 형식(**팀 규격 미정, 이 형식 사용**): 2026-09-30 `col_description` 확인 결과 `theory_chunks.source_alignment`, `excluded_sections.source_region_ids`에 주석 없음(주석은 `raw_text`에만 있음).
+  - `theory_chunks.source_alignment = {"method": "page_text_lines", "path": [제목 경로], "line_range": [시작, 끝]}` (추출 결과 줄 번호, 0부터, 끝 포함)
+  - `excluded_sections.source_region_ids = [{"type": "page_text_lines", "text_uri": 추출 결과 URI, "line_range": [시작, 끝]}]` → text_uri의 줄을 잘라 기출 텍스트 복원 가능
+  - 페이지 요약은 `page_metadata.chunking`(source, chunk_count, needs_review_count, excluded, dropped_lines, prev_state, end_state)
+- 재실행: 페이지 단위 트랜잭션으로 그 페이지의 theory_chunks와 `exam_question` 제외 구간을 지우고 다시 넣는다(임베딩도 사라지므로 embed 재실행 필요).
+- 상태(사용자 확정): detect_visuals는 구현 전까지 건너뛰고 `page_metadata.pipeline.skipped=["detect_visuals"]` 기록. chunk_theory 후 **VERIFIED**, embed 후 **EMBEDDED**. EXTRACTED에 두면 324쪽 전부 quality_passed=false로 검수 대기열을 채우기 때문. 검색 뷰는 페이지 상태를 보지 않는다. 나중에 detect_visuals는 visual_assets만 추가하므로 상태를 되돌리지 않는다.
+- 알려진 한계: 표·그림이 한 줄로 합쳐진 텍스트는 그대로 청크에 들어간다(시각자료 단계에서 보완). 2과목 101쪽 첫 줄 "[34회 출제] [해설 …" 조각은 앞 쪽 블록이 "학습정리"로 끝난 뒤라 청크에 남음.
