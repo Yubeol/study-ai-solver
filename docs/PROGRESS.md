@@ -13,6 +13,8 @@
   - 속도(맑은 고딕으로 만든 A4 30줄): 1장 약 16초, 평균 신뢰도 0.994. **실제 교재 스캔으로는 아직 미측정**
 - 테스트: `uv run pytest` 43개 통과(가짜 OCR 엔진), `uv run pytest -m ocr_model` 1개 통과(실제 모델, 맑은 고딕 없으면 skip)
 - 프론트엔드: 미생성
+- 문서: 설계 보완(오답노트·검수 도구·시각자료 표시 원칙·팀 교재 반입·crop 계획, D-014~D-017). 사용자용 문서 `docs/sessions/`(세션별 설명), `docs/MODIFY_GUIDE.md`(수정 위치 표) — 세션 시작 시 읽지 않음
+- 규칙 추가(CLAUDE.md): 조정 가능한 값은 `.env`/`config.py` 한 곳, LLM 프롬프트는 `backend/app/prompts/` 텍스트 파일. /wrap은 세션 설명 파일까지 작성
 
 ## 다음 작업 (2026-09-30 재정리)
 설계는 ARCHITECTURE의 "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-017 참고.
@@ -21,7 +23,11 @@
    - PDF 장 ↔ 인쇄 페이지 매핑 실제 확인(1·3과목은 PDF가 1장 많음, 3과목 94~96장 = 226~228쪽). 매핑 파일을 만들어 사용자에게 보여준다
    - books/pages 생성(printed_page_number, page_metadata.pdf_index), 팀 텍스트를 extract_text 결과로 저장(engine="team_text", 출처 파일명)
    - **DB 적재는 매핑·계획을 사용자에게 확인받은 뒤**
-   - 주의: PDF 렌더링 라이브러리가 필요하면 공식 자료로 확인 후 `uv add`, DECISIONS에 기록. 교재 이미지·텍스트는 커밋 금지
+   - 현재 실제 파일: `data/raw/adsp/pdf/{1,2,3}과목.pdf`(120MB/104MB/370MB), `data/raw/adsp/team_text/과1`(49개), `과2`(64개), `과3`(210개). 원본은 지우지 말고 정리본을 따로 만든다
+   - 권장 순서: ① 텍스트 파일명 → 쪽번호 목록 뽑아 빠진 쪽 확인(1과목·3과목 1개씩 부족) ② PDF 장별 저해상도 이미지로 쪽번호 대조 → `page_map.json` 초안 ③ 사용자 확인 ④ 페이지 이미지 렌더링·저장 + books/pages INSERT + 텍스트 결과 저장
+   - 관련 파일: 반입 스크립트는 새로 작성(예: `backend/app/ingestion/team_import.py` + `python -m` 실행). 재사용할 것 — `repositories/books.create_book`, `repositories/pages.insert_pages`(printed_page_number는 현재 INSERT에 없음 → 함수 추가 필요), `repositories/runs.create_run/finish_run`, `storage.get_storage().save`, `stages.ocr_key` 형식 참고
+   - 반입한 페이지 상태: 텍스트가 저장되면 EXTRACTED. 이후 단계는 기존 파이프라인(`pipeline.process_page`)에서 extract_text를 뺀 단계 목록으로 돌릴 수 있게 설계(chunk_theory 구현 전까지는 EXTRACTED에서 멈춤)
+   - 주의: PDF 렌더링 라이브러리가 필요하면 공식 자료로 확인 후 `uv add`, DECISIONS에 기록. 교재 이미지·텍스트는 커밋 금지. 조정 값(렌더링 DPI 등)은 config에(CLAUDE.md 규칙). 깨진 파일명은 zip 인코딩(cp949 추정, 미확인) → 쪽번호 숫자만 뽑으면 되므로 복원은 필수 아님
 2. 청킹 + 로컬 임베딩(BGE-M3) → 검색 동작 확인 (머리말/쪽번호 제외, 기출 표시 → exam_clues, raw_text 원문 그대로)
 3. 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽) (D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터)
 4. 그래프 포함 문제 10개로 추출 정확도 확인 (비전 LLM 텍스트화, D-015)
