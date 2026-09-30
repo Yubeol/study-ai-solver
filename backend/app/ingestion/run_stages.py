@@ -37,9 +37,14 @@ from app.storage.base import Storage
 
 TARGET_STATUSES = ("EXTRACTED", "VERIFIED", "EMBEDDED")
 SKIPPED = ["detect_visuals"]  # 구현 전까지 건너뛰는 단계
+_CHUNK = Stage("chunk_theory", stages.chunk_theory, "VERIFIED")
+_EMBED = Stage("embed", stages.embed, "EMBEDDED")
 STAGE_SETS = {
-    "chunk": (Stage("chunk_theory", stages.chunk_theory, "VERIFIED"),),
+    "chunk": (_CHUNK,),
+    "embed": (_EMBED,),  # 청킹된(VERIFIED/EMBEDDED) 페이지만
+    "chunk,embed": (_CHUNK, _EMBED),
 }
+EMBED_STATUSES = ("VERIFIED", "EMBEDDED")
 _SAMPLE_PAGES = 12  # dry-run 표본 텍스트에 넣을 페이지 수(앞에서부터, 제외 구간 있는 페이지 우선 포함)
 
 
@@ -193,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--subject", metavar="KEY[,KEY]", help="page_map key (subject1, subject2,subject3, all)")
     ap.add_argument("--book-id", action="append", default=[], help="대상 book id(업로드 자료). 여러 번 지정 가능")
     ap.add_argument("--stages", choices=list(STAGE_SETS), default="chunk", help="실행할 단계 묶음")
+    ap.add_argument("--pages", metavar="쪽,쪽", help="인쇄 쪽번호로 대상 제한(시험용, 예: 14,15,16)")
     args = ap.parse_args(argv)
     if args.apply and not (args.subject or args.book_id):
         ap.error("--apply에는 --subject 또는 --book-id가 필요합니다(전체는 --subject all)")
@@ -208,8 +214,11 @@ def main(argv: list[str] | None = None) -> int:
         plans = []
         for t in targets:
             pages = list_book_pages(conn, settings, t.book_id)
-            allowed = TARGET_STATUSES
+            allowed = EMBED_STATUSES if args.stages == "embed" else TARGET_STATUSES
             todo = [p for p in pages if p["processing_status"] in allowed]
+            if args.pages:
+                wanted = set(args.pages.split(","))
+                todo = [p for p in todo if p["printed_page_number"] in wanted]
             others: dict[str, int] = {}
             for p in pages:
                 if p["processing_status"] not in allowed:
@@ -218,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for t, todo, others in plans:
         print(f"[{t.key}] {t.title}: 대상 {len(todo)}쪽" + (f", 제외 {others}" if others else ""))
-        if not args.apply:
+        if not args.apply and "chunk" in args.stages:
             summary = dry_run(settings, storage, t, todo)
             print("  " + json.dumps({k: v for k, v in summary.items() if k != "params"}, ensure_ascii=False))
         else:

@@ -1,6 +1,6 @@
 # PROGRESS
 
-## 현재 상태 (2026-09-30 팀 교재 반입 세션 종료 기준)
+## 현재 상태 (2026-09-30 청킹·임베딩 세션 기준)
 - 환경·문서: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
   - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`(C 여유 부족). 새 터미널부터 적용
 - 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev 키는 사용자가 .env에 넣음(TYPESAFE_API_KEY, JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS — 코드에서는 아직 안 씀, 값 미확인). S3 미확인 → STORAGE_BACKEND=local
@@ -9,22 +9,23 @@
   - /health, /health/db, 과목/자료(`GET /subjects`, `POST /books`, `GET /books?subject=`, `GET /books/{id}`), 업로드(`POST /books/{id}/pages`), 상태(`GET /books/{id}/pages`, `GET /processing-runs/{run_id}`)
   - **extract_text 구현 완료(D-013)**: 인쇄체 → PaddleOCR(`app/ingestion/ocr.py`, PP-OCRv5_mobile_det + korean_PP-OCRv5_mobile_rec, CPU, oneDNN 끔). 결과 JSON은 저장소 `books/{book_id}/{page_id}.ocr.json`, 요약은 page_metadata.ocr. personal_note는 REVIEW_REQUIRED("손필기 추출 미구현")
   - **팀 교재 반입(D-014, D-018)**: `app/ingestion/team_import.py` (`--dry-run` 기본 / `--preview` / `--apply --subject`). 매핑은 `data/raw/adsp/page_map.json`, 텍스트는 저장소 `books/{book_id}/{page_id}.text.json`(engine=team_text, 원문 그대로), 요약은 page_metadata.text, 리포트는 `data/reports/team_import/`
-  - 나머지 3단계(detect_visuals, chunk_theory, embed)는 `StageNotImplemented` → 업로드하면 페이지는 **EXTRACTED에서 멈추고** run은 PARTIAL
+  - **청킹 완료(D-019)**: `app/ingestion/chunking.py` + `stages.chunk_theory`. 팀 교재 324쪽 전부 VERIFIED(`pipeline.skipped=["detect_visuals"]`). theory_chunks 1과목 92 / 2과목 122 / 3과목 402(needs_review 11: R 출력·그림 조각), excluded_sections(exam_question, 원문 위치 포함) 24 / 21 / 42
+  - **임베딩 구현(D-020)**: `app/ingestion/embedding.py`(BGE-M3, sentence-transformers 6.1.0, torch CPU, 정규화, 캐시 `E:\hf_models` 4.3GB) + `stages.embed`. **시험으로 1과목 14~20쪽(7쪽)만 EMBEDDED**(36초, 모델 로딩 포함). 나머지 317쪽은 VERIFIED
+  - 실행 진입점: `python -m app.ingestion.run_stages`(dry-run 기본, `--apply --subject`, `--stages chunk|embed|chunk,embed`, `--pages`). 검색 확인: `python -m app.retrieval.search "질문"`(v_searchable_theory)
+  - detect_visuals는 `StageNotImplemented` → 업로드 경로 기본 파이프라인은 여전히 **EXTRACTED에서 멈춤**
   - 모델 캐시: `OCR_MODEL_DIR=E:\paddle_models` (현재 19MB, 쓰는 모델 2개만)
   - 속도(맑은 고딕으로 만든 A4 30줄): 1장 약 16초, 평균 신뢰도 0.994. **실제 교재 스캔으로는 아직 미측정**
-- 테스트: `uv run pytest` 56개 통과(가짜 OCR 엔진, 반입 계획 테스트 13개 포함), `uv run pytest -m ocr_model` 1개 통과(실제 모델, 맑은 고딕 없으면 skip)
+- 테스트: `uv run pytest` 68개 통과(가짜 OCR·가짜 임베더, 청킹 규칙 10개 포함), `-m ocr_model` 1개, `-m embedding_model` 1개(실제 BGE-M3) 통과
 - 프론트엔드: 미생성
 - 문서: 설계 보완(오답노트·검수 도구·시각자료 표시 원칙·팀 교재 반입·crop 계획, D-014~D-017). 사용자용 문서 `docs/sessions/`(세션별 설명), `docs/MODIFY_GUIDE.md`(수정 위치 표) — 세션 시작 시 읽지 않음
 - 규칙 추가(CLAUDE.md): 조정 가능한 값은 `.env`/`config.py` 한 곳, LLM 프롬프트는 `backend/app/prompts/` 텍스트 파일. /wrap은 세션 설명 파일까지 작성
 
-## 다음 작업 (2026-09-30 팀 교재 반입 후 갱신)
-설계는 ARCHITECTURE의 "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-017 참고.
-1. **[다음 세션] 청킹 + 로컬 임베딩(BGE-M3) → 검색 동작 확인** (머리말/쪽번호 제외, 기출 표시 → exam_clues, raw_text 원문 그대로)
-   - 권장 순서: ① 팀 텍스트 몇 쪽(예: 1과목 14·58·59쪽, 3과목 217·226쪽)을 열어 머리말/쪽번호/기출 표시 패턴 정리 → 규칙을 사용자에게 보여주기 ② `stages.chunk_theory` 구현(theory_chunks INSERT, sort_order) ③ extract_text를 뺀 단계로 반입 페이지를 돌리는 실행 진입점(`python -m` 스크립트 또는 재처리 API) ④ BGE-M3 설치(공식 자료 확인·DECISIONS 기록) 후 `stages.embed` ⑤ 질문 몇 개로 벡터 검색 결과 확인
-   - 입력: `pages.page_metadata.text.uri` → 저장소 `books/{book_id}/{page_id}.text.json`의 `text`(team_text). OCR 업로드 페이지는 `page_metadata.ocr.uri`(`.ocr.json`의 lines) → 두 형식을 모두 읽는 함수 하나로
-   - 관련 파일: `backend/app/ingestion/stages.py`(chunk_theory, embed 자리), `pipeline.py`(DEFAULT_STAGES, process_page), `repositories/`(theory_chunks용 새 모듈), `core/config.py`(청크 크기·겹침·임베딩 배치 등 조정 값)
-   - DB: `theory_chunks.embedding_text` NOT NULL, `embedding vector(1024)`, `exam_clues`/`confusable_concepts`는 JSONB, `sort_order`·`processing_run_id`는 001에서 추가한 컬럼. 검색 뷰 `v_searchable_theory`는 needs_review=false + 임베딩 있는 것만
-   - 주의: raw_text는 팀 텍스트 원문 그대로(교정 금지). 팀 텍스트에는 줄 bbox 없음 → source_bbox 비움. 쪽번호 줄은 `|`가 1로 읽힌 형태("127" = 27쪽)도 있음(D-018). 58/59쪽은 줄 분할된 조각(`page_metadata.text.lines`). 청크 크기 등은 config에(CLAUDE.md). DDL이 필요하면 마이그레이션 파일로 사용자 확인 후
+## 다음 작업 (2026-09-30 청킹·임베딩 후 갱신)
+설계는 ARCHITECTURE의 "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-020 참고.
+1. **[다음 세션] 전체 임베딩 실행 + 검색 품질 확인**
+   - 사용자가 실행: `cd backend; uv run python -m app.ingestion.run_stages --apply --subject all --stages embed` (EMBEDDED 7쪽은 다시 덮어씀. 속도는 7쪽 36초 기준 전체 수 분~십수 분 예상, 실측 필요)
+   - 질문 10~20개(과목별)로 `python -m app.retrieval.search` → 1위 적중 여부, 점수 분포 기록 → "자료에서 확인 불가" 임계값 후보(시험 7쪽: 관련 0.53~0.75, 없는 주제 최고 0.42)
+   - 필요하면 하이브리드(clean_text trgm) 검토, 청킹 규칙 보완(2과목 101쪽 첫 줄 기출 조각 등, D-019 알려진 한계)
 2. 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽) (D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터)
 3. 그래프 포함 문제 10개로 추출 정확도 확인 (비전 LLM 텍스트화, D-015)
 4. crop 전체 확장 + 시각자료 설명문 생성 (Gemini, 재시도·폴백 D-010)
@@ -69,3 +70,4 @@
 - 2026-09-30: 설계 문서 보완(코드 변경 없음) — 오답노트·품질 검수 도구·시각자료 표시 원칙, 팀 교재 데이터 반입 경로, 3과목 crop 계획, 다음 작업 순서 재정리 (D-014~D-017)
 - 2026-09-30: 팀 교재 반입 — pypdfium2(BSD-3/Apache-2.0), page_map.json 매핑(3과목 216쪽 누락·252쪽 중복 촬영 확인), 58/59쪽 합본 텍스트 줄 분할, 3권 324페이지 EXTRACTED 반입 (D-018, 테스트 56개 통과)
 - 2026-09-30: 사용자용 문서 — docs/sessions/00-overview.md(백엔드 개요), docs/MODIFY_GUIDE.md(수정 위치 표), CLAUDE.md 규칙 추가(조정 값은 .env/config.py, 프롬프트는 backend/app/prompts/), /wrap 명령 갱신(세션 설명 파일 작성)
+- 2026-09-30: 청킹·임베딩 — chunk_theory(머리말/쪽번호 제외, 제목 경로 이어받기, exam_clues, 기출 문제 블록 제외, 짧은 비한글 조각 needs_review), run_stages 진입점, 팀 교재 324쪽 청킹(VERIFIED), BGE-M3 임베딩(sentence-transformers, E: 캐시) + 1과목 7쪽 시험 임베딩·검색 확인 (D-019, D-020, 테스트 68+2개)

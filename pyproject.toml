@@ -13,6 +13,7 @@ dependencies = [
     "pydantic-settings>=2.15.0",
     "pypdfium2==5.13.0",
     "python-multipart>=0.0.32",
+    "sentence-transformers==6.1.0",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -25,6 +26,9 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["backend"]
 testpaths = ["backend/tests"]
-# 실제 OCR 모델 테스트는 느리므로 기본 실행에서 제외: `uv run pytest -m ocr_model`
-addopts = "-m 'not ocr_model'"
-markers = ["ocr_model: 실제 PaddleOCR 모델을 로드하는 느린 테스트"]
+# 실제 모델 테스트는 느리므로 기본 실행에서 제외: `uv run pytest -m ocr_model`, `-m embedding_model`
+addopts = "-m 'not ocr_model and not embedding_model'"
+markers = [
+    "ocr_model: 실제 PaddleOCR 모델을 로드하는 느린 테스트",
+    "embedding_model: 실제 임베딩 모델(BGE-M3)을 로드하는 느린 테스트",
+]

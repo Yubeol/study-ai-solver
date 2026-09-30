@@ -146,3 +146,16 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 재실행: 페이지 단위 트랜잭션으로 그 페이지의 theory_chunks와 `exam_question` 제외 구간을 지우고 다시 넣는다(임베딩도 사라지므로 embed 재실행 필요).
 - 상태(사용자 확정): detect_visuals는 구현 전까지 건너뛰고 `page_metadata.pipeline.skipped=["detect_visuals"]` 기록. chunk_theory 후 **VERIFIED**, embed 후 **EMBEDDED**. EXTRACTED에 두면 324쪽 전부 quality_passed=false로 검수 대기열을 채우기 때문. 검색 뷰는 페이지 상태를 보지 않는다. 나중에 detect_visuals는 visual_assets만 추가하므로 상태를 되돌리지 않는다.
 - 알려진 한계: 표·그림이 한 줄로 합쳐진 텍스트는 그대로 청크에 들어간다(시각자료 단계에서 보완). 2과목 101쪽 첫 줄 "[34회 출제] [해설 …" 조각은 앞 쪽 블록이 "학습정리"로 끝난 뒤라 청크에 남음.
+
+## D-020 임베딩: sentence-transformers 6.1.0 + BAAI/bge-m3(dense, 정규화), 캐시 E:, 검색은 v_searchable_theory (2026-09-30)
+- 모델: **BAAI/bge-m3**, MIT 라이선스, 1024차원, 최대 8192 토큰. 모델 카드에 dense 임베딩 사용법으로 FlagEmbedding(`BGEM3FlagModel`)과 sentence-transformers(`SentenceTransformer("BAAI/bge-m3")`) 둘 다 제시. 출처: https://huggingface.co/BAAI/bge-m3 (확인 2026-09-30)
+- 라이브러리: **sentence-transformers 6.1.0**(2026-09-18, Apache-2.0, Python>=3.10). 의존성으로 **torch 2.14.0**(PyPI Windows wheel = CPU 빌드, `2.14.0+cpu` 확인), transformers 5.17.0. 출처: https://pypi.org/project/sentence-transformers/ , https://pypi.org/project/torch/ (확인 2026-09-30). `uv add "sentence-transformers==6.1.0"`
+  - FlagEmbedding 1.4.2는 PyPI 메타데이터에 라이선스 표기가 없어 쓰지 않음. sparse/ColBERT 출력이 필요해지면 재검토.
+- 캐시 위치: huggingface_hub는 `HF_HOME`(기본 `~/.cache/huggingface`, 토큰·hub·xet 캐시 포함)과 `HF_HUB_CACHE`(기본 `$HF_HOME/hub`)를 **import 시점에** 읽는다. 출처: https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables (확인 2026-09-30)
+  → `EMBEDDING_MODEL_DIR`(현재 `E:\hf_models`)을 `HF_HOME`으로 설정한 뒤 sentence_transformers를 지연 import하고, import 후 `huggingface_hub.constants.HF_HOME`이 설정과 다르면 오류로 멈춘다(C: 다운로드 방지). Windows 개발자 모드가 아니면 심볼릭 링크 대신 파일 복사(경고만, 동작 문제 없음).
+- 정규화: 모델 카드에 명시 없음. 검색이 cosine(`vector_cosine_ops` HNSW, `<=>`)이므로 `normalize_embeddings=True`로 L2 정규화해 저장한다(사용자 요청).
+- 입력: `theory_chunks.embedding_text`(제목 경로 + clean_text, D-019). 질문에는 접두어(instruction)를 붙이지 않는다(BGE-M3 모델 카드 예시와 동일). `EMBEDDING_MAX_SEQ_LENGTH`=1024 토큰(청크 약 800자), `EMBEDDING_BATCH_SIZE`=8, `EMBEDDING_DEVICE`=cpu.
+- 저장: 임베딩하면 `embedding_enabled=true`, `needs_review=false`로 채운다. D-019의 needs_review=true 조각(짧은 비한글)은 임베딩하지 않는다(검토 후 승인되면 다시 embed).
+- 상태: embed 후 EMBEDDED(D-019). 실행은 `run_stages --stages embed`(VERIFIED/EMBEDDED 페이지만), `--pages`로 쪽 제한.
+- 검색 확인: `python -m app.retrieval.search "질문"`, 대상은 팀 규격 뷰 `v_searchable_theory`(embedding_enabled, embedding 있음, needs_review=false). 새 DDL 없음. Top-K는 `SEARCH_TOP_K`(5).
+- 다운로드 크기(2026-09-30 확인): bge-m3 main에는 `pytorch_model.bin`(2.27GB)만 있고, transformers가 Hub PR(refs/pr/130)의 `model.safetensors`(2.27GB)를 추가로 받아 `E:\hf_models`가 약 4.3GB. C: 캐시는 늘지 않음(기존 `~/.cache/huggingface` 1.3GB는 09-29 이전 PaddleOCR·다른 프로젝트 것).

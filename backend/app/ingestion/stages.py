@@ -11,7 +11,7 @@ from uuid import UUID
 import psycopg
 
 from app.core.config import Settings
-from app.ingestion import chunking, ocr
+from app.ingestion import chunking, embedding, ocr
 from app.ingestion.images import decode_bgr
 from app.repositories import books as books_repo
 from app.repositories import pages as pages_repo
@@ -144,5 +144,14 @@ def chunk_theory(ctx: PageContext) -> None:
 
 
 def embed(ctx: PageContext) -> None:
-    """TODO: 시각자료 설명문 생성 + BGE-M3 임베딩 저장, 링크 테이블 채우기."""
-    raise StageNotImplemented("embed")
+    """이론 청크 BGE-M3 임베딩(정규화) 저장 (D-020). 입력은 embedding_text.
+
+    TODO: 시각자료 설명문 생성·임베딩, 링크 테이블 채우기(시각자료 단계 구현 후).
+    """
+    rows = chunks_repo.list_for_embedding(ctx.conn, ctx.settings, ctx.page_id)
+    if not rows:
+        return
+    vecs = embedding.get_embedder(ctx.settings).encode([text for _, text in rows])
+    chunks_repo.save_embeddings(
+        ctx.conn, ctx.settings, [(cid, embedding.to_pgvector(v)) for (cid, _), v in zip(rows, vecs, strict=True)]
+    )

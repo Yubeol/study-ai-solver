@@ -91,3 +91,20 @@ def count_by_page(conn: psycopg.Connection, settings: Settings, page_id: UUID) -
     q = sql.SQL("SELECT count(*) FROM {s}.theory_chunks WHERE page_id = %s").format(s=sql.Identifier(settings.db_schema))
     return conn.execute(q, (page_id,)).fetchone()[0]
 
+
+def list_for_embedding(conn: psycopg.Connection, settings: Settings, page_id: UUID) -> list[tuple[UUID, str]]:
+    """임베딩할 청크(id, embedding_text). needs_review=true인 조각은 검색에서 빠지므로 임베딩하지 않는다."""
+    q = sql.SQL(
+        "SELECT id, embedding_text FROM {s}.theory_chunks WHERE page_id = %s AND NOT needs_review ORDER BY sort_order"
+    ).format(s=sql.Identifier(settings.db_schema))
+    return conn.execute(q, (page_id,)).fetchall()
+
+
+def save_embeddings(conn: psycopg.Connection, settings: Settings, rows: list[tuple[UUID, str]]) -> None:
+    """(chunk_id, pgvector 텍스트) 목록을 저장하고 embedding_enabled=true, needs_review=false로 둔다."""
+    q = sql.SQL(
+        "UPDATE {s}.theory_chunks SET embedding = %s::public.vector, embedding_enabled = true, needs_review = false "
+        "WHERE id = %s"
+    ).format(s=sql.Identifier(settings.db_schema))
+    with conn.transaction(), conn.cursor() as cur:
+        cur.executemany(q, [(vec, chunk_id) for chunk_id, vec in rows])

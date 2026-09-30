@@ -89,7 +89,11 @@ adsp-study-rag/
   - 단계가 `NeedsReview`를 던지면 REVIEW_REQUIRED(review_required=true) 후 그 페이지 중단, 그 밖의 예외는 FAILED
   - 현재 단계·오류·사유·갱신 시각은 page_metadata.pipeline에 기록
   - run 집계: 전부 성공 SUCCESS / 전부 실패 FAILED / 그 외 PARTIAL
-- 구현된 단계: extract_text(인쇄체 PaddleOCR, D-013). 나머지 단계는 `StageNotImplemented` → 페이지는 EXTRACTED에서 멈추고 `pipeline.stopped="not_implemented"`, run은 PARTIAL. 아래 2~5를 하나씩 채운다.
+- 구현된 단계: extract_text(인쇄체 PaddleOCR, D-013), chunk_theory(D-019), embed(이론 청크만, D-020). detect_visuals는 `StageNotImplemented` → 업로드 경로의 기본 파이프라인은 여전히 EXTRACTED에서 멈추고 `pipeline.stopped="not_implemented"`, run은 PARTIAL.
+- 이후 단계만 다시 돌리기(2026-09-30): `python -m app.ingestion.run_stages`(dry-run 기본, `--apply --subject KEY|all` / `--book-id`, `--stages chunk|embed|chunk,embed`, `--pages`). detect_visuals는 건너뛰고 `page_metadata.pipeline.skipped=["detect_visuals"]` 기록, chunk_theory 후 VERIFIED, embed 후 EMBEDDED(D-019). `run_pipeline`의 `pipeline_extra`로 기록.
+- chunk_theory: 추출 결과(`.text.json`의 text 또는 `.ocr.json`의 lines) → `chunking.chunk_page`(순수 함수) → 페이지 단위 트랜잭션으로 theory_chunks·excluded_sections(exam_question) 삭제 후 재삽입, `page_metadata.chunking`(end_state = 다음 페이지가 이어받을 제목 경로). 앞 페이지 상태는 같은 book의 upload_index 직전 페이지에서 읽는다.
+- embed: needs_review=false 청크의 embedding_text → BGE-M3(sentence-transformers, CPU, 정규화) → embedding, embedding_enabled=true. 모델은 프로세스당 1개, 캐시는 `EMBEDDING_MODEL_DIR`(→ HF_HOME).
+- 검색: `app/retrieval/search.py`의 `search_theory`(v_searchable_theory, cosine `<=>`, Top-K). 확인용 CLI `python -m app.retrieval.search "질문"`.
 - extract_text: books.material_type 확인 → personal_note는 REVIEW_REQUIRED("손필기 추출 미구현") / 그 외는 저장소 원본 바이트 → `cv2.imdecode` → OCR → 전체 결과 `books/{book_id}/{page_id}.ocr.json`(engine + lines[text, confidence, bbox]) 저장, `page_metadata.ocr`에 요약(uri, line_count, mean_confidence, 엔진·모델)
 - OCR 엔진은 프로세스당 1개(첫 호출 시 로드), 추론은 잠금으로 직렬화. 모델 캐시는 `OCR_MODEL_DIR`(→ PADDLE_PDX_CACHE_HOME)
 - 테스트: 기본 `uv run pytest`는 가짜 OCR 엔진 사용, 실제 모델은 `uv run pytest -m ocr_model`(맑은 고딕 없으면 skip)

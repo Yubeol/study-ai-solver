@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # 임베딩
     embedding_model: str = ""
     embedding_dim: int = 1024
+    embedding_model_dir: Path | None = None  # HF_HOME으로 전달(모델·xet 캐시). 비우면 ~/.cache/huggingface(C:)
+    embedding_device: str = "cpu"
+    embedding_batch_size: int = Field(default=8, gt=0)
+    embedding_max_seq_length: int = Field(default=1024, gt=0)  # 토큰. 청크는 약 800자라 충분(모델 최대 8192)
+
+    # 검색
+    search_top_k: int = Field(default=5, gt=0)
 
     # 판정기
     judge_provider: Literal["none", "jev_typesafe", "jev_cloudflare", "llm"] = "none"
@@ -82,7 +89,7 @@ class Settings(BaseSettings):
     chunk_review_max_chars: int = Field(default=80, ge=0)
     chunk_review_min_hangul_ratio: float = Field(default=0.3, ge=0, le=1)
 
-    @field_validator("ocr_model_dir", mode="before")
+    @field_validator("ocr_model_dir", "embedding_model_dir", mode="before")
     @classmethod
     def _empty_path_is_none(cls, v):
         return None if v == "" else v

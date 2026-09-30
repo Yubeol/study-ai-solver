@@ -30,21 +30,26 @@
 | 팀 교재 저장 이미지 해상도·화질 | `.env` | `TEAM_IMPORT_RENDER_DPI`(72 = 원본 해상도), `TEAM_IMPORT_JPEG_QUALITY` | dry-run 끝 줄에 적용 값 표시 / 반입 후 `pages.source_width/height` |
 | 팀 교재 쪽번호 대조 미리보기 | `.env` | `TEAM_IMPORT_PREVIEW_DPI` (저장용과 별개) | `uv run python -m app.ingestion.team_import --preview subject3:84,85` → `data/reports/team_import/preview_subject3.jpg` |
 | 팀 교재·보고서 폴더 위치 | `.env` | `TEAM_IMPORT_DIR`, `REPORTS_DIR` | dry-run 실행 |
+| 청크 크기·겹침·짧은 끝 조각 합치기 | `.env` | `CHUNK_MAX_CHARS`(800), `CHUNK_OVERLAP_CHARS`(120), `CHUNK_MIN_CHARS`(80). 글자 수 기준, 청크는 페이지를 넘지 않음 | `cd backend; uv run python -m app.ingestion.run_stages --subject subject1` → 요약의 `clean_chars`, `data/reports/chunking/subject1.txt` |
+| 제목으로 인정할 최대 길이 | `.env` | `CHUNK_HEADING_MAX_CHARS`(60). "1. …", "2) …"여도 이보다 길면 본문 | 위 dry-run → 리포트의 청크 `제목=` |
+| 검색에서 뺄 조각(R 출력·그림 글자) 기준 | `.env` | `CHUNK_REVIEW_MAX_CHARS`(80) 미만 **그리고** 본문 한글 비율 `CHUNK_REVIEW_MIN_HANGUL_RATIO`(0.3) 미만이면 needs_review=true | 위 dry-run 요약의 `needs_review` |
+| 머리말/쪽번호 제거, 제목 인식, 기출 표시(exam_clues), 기출 문제 블록(제외 영역) 규칙 | `backend/app/ingestion/chunking.py` | 맨 위 패턴(`_BOOK_HEADER`, `_SUBJECT_FOOTER`, `_SECTION`, `_ITEM`, `_EXAM_MARK`, `_EXAM_BLOCK_START`, `_EXAM_BLOCK_END` 등), `looks_like_exam`(다음 쪽으로 이어지는 문제 블록 판단). 규칙 설명은 DECISIONS D-019 | `uv run pytest backend/tests/test_chunking.py` → dry-run 리포트 확인 → `--apply --subject …`(기존 청크를 지우고 다시 넣음, 임베딩도 다시 해야 함) |
+| 임베딩 모델·차원·장치 | `.env` | `EMBEDDING_MODEL`(BAAI/bge-m3), `EMBEDDING_DIM`(1024, DB 컬럼이 vector(1024)라 바꾸면 안 됨), `EMBEDDING_DEVICE`(cpu) | `uv run pytest -m embedding_model` |
+| 임베딩 모델 저장 위치 | `.env` | `EMBEDDING_MODEL_DIR` (HF_HOME으로 전달, 현재 `E:\hf_models`, 비우면 C:) | 첫 실행 후 그 폴더 아래 `hub/models--BAAI--bge-m3` |
+| 임베딩 속도·메모리 | `.env` | `EMBEDDING_BATCH_SIZE`(8), `EMBEDDING_MAX_SEQ_LENGTH`(1024 토큰, 넘으면 잘림) | `run_stages --stages embed --pages 14,15` 실행 시간 |
+| 검색 개수(Top-K) | `.env` | `SEARCH_TOP_K`(5) | `cd backend; uv run python -m app.retrieval.search "질문"` |
+| 청킹·임베딩 다시 돌리기 | 명령 | `cd backend; uv run python -m app.ingestion.run_stages --apply --subject all` (청킹, VERIFIED) / `--stages embed` (임베딩, EMBEDDED) / `--stages chunk,embed` / `--pages 14,15`로 쪽 제한 / 업로드 자료는 `--book-id` | DataGrip: `mingyu.theory_chunks`, `pages.page_metadata.chunking` |
 | DB 구조(컬럼·테이블 추가) | `backend/migrations/` | 새 번호 파일(`003_...sql`) 추가. 적용된 파일은 수정 금지, 팀 규격 컬럼은 추가만 | `cd backend; uv run python -m app.db.migrate --dry-run` → 사용자 확인 → `uv run python -m app.db.migrate` |
 
 ## 2. 아직 없는 기능 (구현하면 채운다)
 
 | 바꾸고 싶은 것 | 열어야 할 파일 | 무엇을 바꾸면 되는지 | 바꾼 뒤 확인 방법 |
 |---|---|---|---|
-| 머리말/쪽번호 제거 규칙, 기출 표시(exam_clues) 규칙 | | | |
-| 청크 크기·겹침 | | | |
-| 제외 영역(예제/기출/코드) 판단 기준 | | | |
 | 원근·조명 보정 강도 | | | |
 | 시각자료 검출(레이아웃 모델, 신뢰도 기준) | | | |
 | crop 여백 | | | |
 | 시각자료 설명문 프롬프트 | | | |
-| 임베딩 모델·차원 | | | |
-| 검색 개수(Top-K), 벡터/키워드 비중 | | | |
+| 벡터/키워드 검색 비중(하이브리드) | | | |
 | 답변 생성 프롬프트(시험모드) | | | |
 | 제약 프리셋 | | | |
 | 문제 사진 추출 프롬프트(그래프 텍스트화 포함) | | | |
