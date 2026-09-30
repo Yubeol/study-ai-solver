@@ -26,7 +26,7 @@
 | DB 커넥션 풀 크기 | `backend/app/db/connection.py` | `create_pool`의 `min_size`, `max_size` (현재 1/5, 공유 서버이므로 크게 늘리지 않기) | 서버 재시작 → `GET /health/db` |
 | Gemini 모델 | `.env` | `GEMINI_MODEL_LITE`, `GEMINI_MODEL_STRONG` — 지금은 processing_runs.gemini_model 기록에만 쓰임 | DataGrip: `mingyu.processing_runs.gemini_model` |
 | 판정기 선택 | `.env` | `JUDGE_PROVIDER` (none / jev_typesafe / jev_cloudflare / llm) — 지금은 `/health/db` 표시에만 쓰임 | `GET /health/db`의 `judge_provider` |
-| 팀 교재 PDF 장 ↔ 인쇄 쪽 매핑, 과목 제목, 합본 텍스트 파일 처리 | `data/raw/adsp/page_map.json` (gitignore) | `segments`(PDF 장 범위 + offset), `skip_pdf`(중복 촬영 등 건너뛸 장), `text_files`(여러 쪽짜리 텍스트 파일 → 쪽 목록, 첫 쪽에 붙음), `title`/`subject`/`source_name` | `cd backend; uv run python -m app.ingestion.team_import --dry-run` → 요약과 `data/reports/team_import/plan.json` |
+| 팀 교재 PDF 장 ↔ 인쇄 쪽 매핑, 과목 제목, 합본 텍스트 파일 처리 | `data/raw/adsp/page_map.json` (gitignore) | `segments`(PDF 장 범위 + offset), `skip_pdf`(중복 촬영 등 건너뛸 장), `text_files`(여러 쪽짜리 텍스트 파일 → 쪽 목록. `split_at_lines`로 나눌 줄 번호 지정, 없으면 첫 쪽에 붙음), `title`/`subject`/`source_name` | `cd backend; uv run python -m app.ingestion.team_import --dry-run` → 요약과 `data/reports/team_import/plan.json`. 실제 반입은 `--apply --subject subject1`(전체는 `all`), 결과는 `apply_{key}.json` |
 | 팀 교재 저장 이미지 해상도·화질 | `.env` | `TEAM_IMPORT_RENDER_DPI`(72 = 원본 해상도), `TEAM_IMPORT_JPEG_QUALITY` | dry-run 끝 줄에 적용 값 표시 / 반입 후 `pages.source_width/height` |
 | 팀 교재 쪽번호 대조 미리보기 | `.env` | `TEAM_IMPORT_PREVIEW_DPI` (저장용과 별개) | `uv run python -m app.ingestion.team_import --preview subject3:84,85` → `data/reports/team_import/preview_subject3.jpg` |
 | 팀 교재·보고서 폴더 위치 | `.env` | `TEAM_IMPORT_DIR`, `REPORTS_DIR` | dry-run 실행 |

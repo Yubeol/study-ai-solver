@@ -102,14 +102,18 @@ adsp-study-rag/
 4. 시각자료 설명문 + embedding_text 생성: crop + 관련 이론 문장 2~5개 → GEMINI_MODEL_LITE, 품질 낮은 것만 GEMINI_MODEL_STRONG 재처리
 5. 로컬 임베딩(BGE-M3, 1024) → 저장, 링크 테이블 채우기
 
-### 팀 교재 반입 경로 (설계, 2026-09-30, D-014)
+### 팀 교재 반입 경로 (구현 완료 2026-09-30, D-014, D-018)
 팀 교재 3권(`data/raw/adsp/`)은 업로드 API를 거치지 않고 반입 스크립트로 넣는다. extract_text 단계만 "팀 텍스트 사용"으로 바꾸고, 이후 단계(시각자료, 청킹, 임베딩)는 업로드 경로와 같은 코드를 쓴다.
 1. 파일명 정리: PDF → `subject1~3.pdf`, 텍스트 폴더 → `subject1~3/`, 깨진 파일명에서 인쇄 페이지 번호만 뽑아 `p{번호:03d}.txt`로 정리(원본 zip/폴더는 보존)
 2. PDF 장 ↔ 인쇄 페이지 매핑 확인: PDF 장을 이미지로 렌더링하고 쪽번호(텍스트의 "… | 14" 머리말과 이미지)로 대조. 1·3과목은 PDF가 1장 많으므로 남는 장(표지·중복 촬영 등)을 찾는다. 결과는 매핑 파일(`data/raw/adsp/page_map.json` 등)로 남기고 사용자 확인
 3. books/pages 생성: 과목당 books 1행(material_type=textbook, source_name에 팀 자료 표시), PDF 장마다 pages 1행. 렌더링한 페이지 이미지를 저장소에 두고 `source_s3_uri`, `printed_page_number`를 채운다. `page_metadata`에 `pdf_index`(PDF 장 번호), `text_source="team_text"`
 4. 텍스트 저장: 팀 텍스트를 extract_text 결과로 저장(`books/{book_id}/{page_id}.text.json`, engine="team_text", 출처 파일명). OCR과 달리 줄 bbox가 없다 → 청크 `source_bbox`는 비워 두고 페이지 단위 출처만 표시
 5. 머리말/쪽번호 줄("1과목 데이터 이해 | 14")은 청킹 시 제외. "(★기출)", "5년간 출제 횟수", "학습목표"는 해당 청크의 `exam_clues`(JSONB)로 옮긴다. `raw_text`는 팀 텍스트 원문 그대로
-- DB 적재는 1~2 결과(매핑·파일 정리)를 사용자에게 보여주고 확인받은 뒤에 한다.
+- 구현(D-018): `app/ingestion/team_import.py`. 1번 파일명 정리는 하지 않고 `page_map.json`이 원본 경로를 가리킨다(NFD 파일명은 NFC 비교로 찾음).
+  - page_map: `segments`(PDF 장 범위 + offset), `skip_pdf`, `missing_printed`, `text_files`(여러 쪽 파일의 쪽 목록, `split_at_lines`로 줄 단위 분할)
+  - 흐름: 계획(build_plan, DB·파일 접근 없음) → 이미지(`books/{book_id}/{page_id}.jpg`, TEAM_IMPORT_RENDER_DPI)·텍스트 JSON 저장 → book 단위 트랜잭션(books + processing_runs 1건 + pages + 상태) → 실패 시 저장 파일 삭제. 같은 subject·title·source_name book이 있으면 건너뜀
+  - page_metadata: pdf_file, pdf_index, upload_index, text_source, render_dpi, text{uri, engine, source_file, covers_pages, lines, note, char_count}, missing_before, pipeline
+  - 반입 결과: 3권 324페이지 EXTRACTED, run PARTIAL. 리포트 `data/reports/team_import/apply_{key}.json`
 - PaddleOCR 경로는 새로 업로드하는 캡처용으로 유지한다(우선순위만 뒤로).
 
 ### 시각자료 crop 파이프라인 (설계, 2026-09-30, D-016)

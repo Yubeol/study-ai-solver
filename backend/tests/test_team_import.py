@@ -2,7 +2,9 @@
 
 import unicodedata
 
-from app.ingestion.team_import import build_plan, footer_numbers, footer_matches
+import pytest
+
+from app.ingestion.team_import import build_plan, footer_matches, footer_numbers, main, slice_lines
 
 
 def _cfg(**kw):
@@ -46,6 +48,42 @@ def test_merged_text_file_goes_to_first_page():
     assert plan.errors == []
     assert plan.pages[0].text_file == "과1-10-11p.txt" and plan.pages[0].covers_pages == [10, 11]
     assert plan.pages[1].status == "REVIEW_REQUIRED" and "합쳐져" in plan.pages[1].reason
+
+
+def test_split_at_lines_keeps_text_unchanged():
+    text = "10쪽 첫줄\n10쪽 끝\n\n11쪽 첫줄\n11\n"
+    cfg = _cfg(text_files={"과1-10-11p.txt": {"pages": [10, 11], "split_at_lines": [3]}})
+    plan = build_plan(cfg, 3, {"과1-10-11p.txt": text, "과1-12p.txt": "c"})
+    assert plan.errors == []
+    p10, p11 = plan.pages[0], plan.pages[1]
+    assert (p10.status, p10.text_lines, p10.covers_pages) == ("EXTRACTED", [1, 2], [10])
+    assert (p11.status, p11.text_lines, p11.covers_pages) == ("EXTRACTED", [3, 5], [11])
+    assert "과1-10-11p.txt의 3번째 줄에서 분할" in p10.text_note and "3번째 줄에서 분할" in p11.text_note
+    # 조각을 이으면 원문과 같다(내용 변경 없음)
+    assert slice_lines(text, p10.text_lines) + slice_lines(text, p11.text_lines) == text
+    assert p11.footer_check == "match"
+
+
+def test_bad_split_is_error():
+    cfg = _cfg(text_files={"과1-10-11p.txt": {"pages": [10, 11], "split_at_lines": [99]}})
+    plan = build_plan(cfg, 3, {"과1-10-11p.txt": "a\nb\n", "과1-12p.txt": "c"})
+    assert any("split_at_lines" in e for e in plan.errors)
+
+
+def test_missing_printed_is_recorded_on_next_page():
+    # 1~2장 = 10~11쪽, 3장 = 13쪽 (12쪽 누락)
+    cfg = _cfg(
+        segments=[{"pdf_from": 1, "pdf_to": 2, "offset": 9}, {"pdf_from": 3, "pdf_to": 3, "offset": 10}],
+        missing_printed=[{"printed": 12, "reason": "촬영 안 됨"}],
+    )
+    plan = build_plan(cfg, 3, {f"과1-{p}p.txt": "x" for p in (10, 11, 13)})
+    assert plan.errors == []
+    assert [p.missing_before for p in plan.pages] == [[], [], [{"printed": 12, "reason": "촬영 안 됨"}]]
+
+
+def test_apply_requires_subject():
+    with pytest.raises(SystemExit):
+        main(["--apply"])
 
 
 def test_multi_page_name_without_override_is_error():

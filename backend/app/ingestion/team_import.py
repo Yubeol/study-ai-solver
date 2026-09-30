@@ -7,7 +7,7 @@
     uv run python -m app.ingestion.team_import                 # dry-run(기본): 계획만 출력·저장
     uv run python -m app.ingestion.team_import --preview subject3:84,85,120
                                                                # 쪽번호 대조용 저해상도 띠 이미지
-    uv run python -m app.ingestion.team_import --apply         # 실제 저장 + INSERT
+    uv run python -m app.ingestion.team_import --apply --subject subject1   # 실제 저장 + INSERT(과목 필수, 전체는 all)
 
 - PDF 장 ↔ 인쇄 쪽 매핑은 `{TEAM_IMPORT_DIR}/page_map.json`(사람이 표본 대조로 확정한 값)을 따른다.
 - 텍스트는 원문 그대로(UTF-8) 저장하고 교정하지 않는다.
@@ -34,6 +34,7 @@ from app.ingestion.stages import text_key
 IMPORT_VERSION = "0.1-team-text"
 TEXT_ENGINE = "team_text"
 _TEXT_NAME = re.compile(r"^.+-(\d+)p\.txt$")  # 과1-14p.txt → 14 (두 쪽짜리 이름은 page_map에 명시)
+_MULTI_PAGE_NAME = re.compile(r"^.+-\d+-\d+p\.txt$")
 _FOOTER_NUM = re.compile(r"^\s*(\d{1,3})\s*\|?\s*$|\|\s*(\d{1,3})\s*$")  # "215", "14 |", "... | 57"
 
 
@@ -47,6 +48,9 @@ class PagePlan:
     status: str  # EXTRACTED / REVIEW_REQUIRED
     text_file: str | None = None
     covers_pages: list[int] = field(default_factory=list)
+    text_lines: list[int] | None = None  # [시작, 끝] 줄 번호(1부터, 끝 포함). None이면 파일 전체
+    text_note: str | None = None  # 분할 위치, 파일명과 내용이 다른 경우 등 메모
+    missing_before: list[dict] = field(default_factory=list)  # 바로 앞에 빠진 쪽(촬영 누락 등)
     reason: str | None = None
     footer_check: str | None = None  # match / mismatch:<숫자들> / none
 
@@ -67,8 +71,12 @@ class BookPlan:
     errors: list[str]
 
 
-class PlanError(Exception):
-    pass
+@dataclass(frozen=True)
+class TextSource:
+    name: str
+    covers: list[int]
+    lines: list[int] | None = None
+    note: str | None = None
 
 
 def nfc(s: str) -> str:
@@ -115,30 +123,63 @@ def pdf_to_printed(cfg: dict, pdf_page_count: int) -> tuple[dict[int, int], list
     return mapping, errors
 
 
-def text_file_pages(cfg: dict, names: list[str]) -> tuple[dict[int, tuple[str, list[int]]], list[str]]:
-    """텍스트 파일 → 쪽. 여러 쪽짜리 파일은 첫 쪽에 붙이고, 나머지 쪽은 합본 표시만 한다.
+def slice_lines(text: str, lines: list[int] | None) -> str:
+    """줄 범위만 잘라낸다. 줄바꿈을 포함해 자르므로 조각을 이으면 원문과 같다(내용 변경 없음)."""
+    if lines is None:
+        return text
+    start, end = lines
+    return "".join(text.splitlines(keepends=True)[start - 1 : end])
 
-    반환: {쪽: (파일명, 이 파일이 덮는 쪽 목록)} — 첫 쪽만 키로 들어간다.
+
+def _split_sources(name: str, covers: list[int], splits: list[int], text: str, note: str | None):
+    """`split_at_lines`(다음 쪽이 시작하는 줄 번호들)로 한 파일을 쪽별로 나눈다."""
+    n = len(text.splitlines(keepends=True))
+    if len(splits) != len(covers) - 1 or splits != sorted(set(splits)) or not all(1 < s <= n for s in splits):
+        raise ValueError(f"{name}: split_at_lines {splits}가 쪽 {covers} / 줄 수 {n}과 맞지 않음")
+    starts = [1, *splits]
+    ends = [s - 1 for s in splits] + [n]
+    where = ", ".join(f"{s}번째 줄" for s in splits)
+    out = {}
+    for page, s, e in zip(covers, starts, ends, strict=True):
+        memo = f"{name}의 {where}에서 분할 ({page}쪽 = {s}~{e}줄)"
+        out[page] = TextSource(name, [page], [s, e], f"{memo}. {note}" if note else memo)
+    return out
+
+
+def text_file_pages(cfg: dict, texts: dict[str, str]) -> tuple[dict[int, TextSource], list[str]]:
+    """텍스트 파일 → 쪽.
+
+    - 보통 파일: 파일명의 쪽번호(`과1-14p.txt` → 14)
+    - page_map `text_files`에 적힌 파일: `pages` 목록을 따른다. `split_at_lines`가 있으면 쪽별로 나누고,
+      없으면 첫 쪽에 전체를 붙인다(나머지 쪽은 합본 표시).
     """
     overrides = {nfc(k): v for k, v in cfg.get("text_files", {}).items()}
     errors: list[str] = []
-    result: dict[int, tuple[str, list[int]]] = {}
-    for raw in sorted(names):
-        name = nfc(raw)
+    result: dict[int, TextSource] = {}
+
+    def put(page: int, src: TextSource) -> None:
+        if page in result:
+            errors.append(f"{page}쪽 텍스트 파일 중복: {result[page].name}, {src.name}")
+        result[page] = src
+
+    for name in sorted(texts):
         if name in overrides:
-            covers = list(overrides[name]["pages"])
+            ov = overrides[name]
+            covers = list(ov["pages"])
+            if splits := ov.get("split_at_lines"):
+                try:
+                    for page, src in _split_sources(name, covers, splits, texts[name], ov.get("note")).items():
+                        put(page, src)
+                except ValueError as e:
+                    errors.append(str(e))
+            else:
+                put(covers[0], TextSource(name, covers, note=ov.get("note")))
+        elif _MULTI_PAGE_NAME.match(name):
+            errors.append(f"여러 쪽짜리 파일은 page_map text_files에 적어야 함: {name}")
         elif m := _TEXT_NAME.match(name):
-            if re.match(r"^.+-\d+-\d+p\.txt$", name):
-                errors.append(f"여러 쪽짜리 파일은 page_map text_files에 적어야 함: {name}")
-                continue
-            covers = [int(m.group(1))]
+            put(int(m.group(1)), TextSource(name, [int(m.group(1))]))
         else:
             errors.append(f"쪽번호를 알 수 없는 파일명: {name}")
-            continue
-        first = covers[0]
-        if first in result:
-            errors.append(f"{first}쪽 텍스트 파일 중복: {result[first][0]}, {name}")
-        result[first] = (name, covers)
     return result, errors
 
 
@@ -159,36 +200,46 @@ def footer_matches(num: int, pages: list[int]) -> bool:
 def build_plan(cfg: dict, pdf_page_count: int, texts: dict[str, str]) -> BookPlan:
     """PDF 장 수와 텍스트 파일({파일명: 내용})로 페이지별 계획을 만든다(DB·파일 접근 없음)."""
     mapping, errors = pdf_to_printed(cfg, pdf_page_count)
-    by_page, text_errors = text_file_pages(cfg, list(texts))
-    errors += text_errors
     texts = {nfc(k): v for k, v in texts.items()}
+    by_page, text_errors = text_file_pages(cfg, texts)
+    errors += text_errors
 
-    merged_into: dict[int, str] = {}  # 합본 파일의 두 번째 이후 쪽 → 파일명
-    for first, (name, covers) in by_page.items():
-        for p in covers[1:]:
-            merged_into[p] = f"{first}쪽 파일({name})"
+    merged_into: dict[int, str] = {}  # 나누지 않은 합본 파일의 두 번째 이후 쪽 → 파일명
+    for first, src in by_page.items():
+        for p in src.covers[1:]:
+            merged_into[p] = f"{first}쪽 파일({src.name})"
 
+    missing = list(cfg.get("missing_printed", []))
+    printed_all = sorted(mapping.values())
     pages: list[PagePlan] = []
     used: set[int] = set()
     for pdf_index, printed in sorted(mapping.items()):
+        # 이 쪽 바로 앞(이전 반입 쪽과 이 쪽 사이)에 빠진 쪽
+        prev = max((q for q in printed_all if q < printed), default=None)
+        before = [m for m in missing if (prev is None or m["printed"] > prev) and m["printed"] < printed]
         if printed in by_page:
-            name, covers = by_page[printed]
+            src = by_page[printed]
             used.add(printed)
-            nums = footer_numbers(texts[name])
+            nums = footer_numbers(slice_lines(texts[src.name], src.lines))
             if not nums:
                 check = "none"
-            elif any(footer_matches(n, covers) for n in nums):
+            elif any(footer_matches(n, src.covers) for n in nums):
                 check = "match"
             else:
                 check = "mismatch:" + ",".join(map(str, nums))
-            pages.append(PagePlan(pdf_index, printed, "EXTRACTED", name, covers, footer_check=check))
-        elif printed in merged_into:
-            reason = f"team_text 없음 (이 쪽 내용은 {merged_into[printed]}에 합쳐져 있음)"
-            pages.append(PagePlan(pdf_index, printed, "REVIEW_REQUIRED", reason=reason))
+            pages.append(
+                PagePlan(
+                    pdf_index, printed, "EXTRACTED", src.name, src.covers, src.lines, src.note, before,
+                    footer_check=check,
+                )
+            )
         else:
-            pages.append(PagePlan(pdf_index, printed, "REVIEW_REQUIRED", reason="team_text 없음"))
+            reason = "team_text 없음"
+            if printed in merged_into:
+                reason += f" (이 쪽 내용은 {merged_into[printed]}에 합쳐져 있음)"
+            pages.append(PagePlan(pdf_index, printed, "REVIEW_REQUIRED", missing_before=before, reason=reason))
     if unused := sorted(set(by_page) - used):
-        errors.append(f"PDF 장에 연결되지 않은 텍스트: {[by_page[p][0] for p in unused]}")
+        errors.append(f"PDF 장에 연결되지 않은 텍스트: {[by_page[p].name for p in unused]}")
 
     return BookPlan(
         key=cfg["key"],
@@ -201,7 +252,7 @@ def build_plan(cfg: dict, pdf_page_count: int, texts: dict[str, str]) -> BookPla
         pdf_page_count=pdf_page_count,
         pages=pages,
         skipped_pdf=list(cfg.get("skip_pdf", [])),
-        missing_printed=list(cfg.get("missing_printed", [])),
+        missing_printed=missing,
         errors=errors,
     )
 
@@ -316,24 +367,23 @@ def apply_book(settings: Settings, plan: BookPlan) -> str:
                         "text_source": TEXT_ENGINE,
                         "render_dpi": settings.team_import_render_dpi,
                     }
+                    if pp.missing_before:
+                        meta["missing_before"] = pp.missing_before
                     if pp.text_file:
-                        body = {
+                        text = slice_lines(texts[pp.text_file], pp.text_lines)  # 원문 그대로(줄 범위만)
+                        source = {
                             "engine": TEXT_ENGINE,
                             "source_file": pp.text_file,
                             "covers_pages": pp.covers_pages,
-                            "text": texts[pp.text_file],  # 원문 그대로
+                            "lines": pp.text_lines,
+                            "note": pp.text_note,
                         }
                         t_uri = storage.save(
-                            text_key(book_id, page_id), json.dumps(body, ensure_ascii=False).encode("utf-8")
+                            text_key(book_id, page_id),
+                            json.dumps({**source, "text": text}, ensure_ascii=False).encode("utf-8"),
                         )
                         saved.append(t_uri)
-                        meta["text"] = {
-                            "uri": t_uri,
-                            "engine": TEXT_ENGINE,
-                            "source_file": pp.text_file,
-                            "covers_pages": pp.covers_pages,
-                            "char_count": len(texts[pp.text_file]),
-                        }
+                        meta["text"] = {"uri": t_uri, **source, "char_count": len(text)}
                     new_pages.append(
                         pages_repo.NewPage(
                             id=page_id,
@@ -379,7 +429,31 @@ def apply_book(settings: Settings, plan: BookPlan) -> str:
                 except Exception:
                     pass
             raise
-    return f"[{plan.key}] 반입 완료 book={book_id} run={run_id}({status}) pages={len(new_pages)} review={review}"
+    # books·processing_runs에는 메모 컬럼이 없으므로 누락 쪽·특이사항은 반입 리포트에 남긴다.
+    report = {
+        "key": plan.key,
+        "book_id": str(book_id),
+        "run_id": str(run_id),
+        "run_status": status,
+        "imported_at": now,
+        "pdf_file": pdf_name,
+        "page_count": len(new_pages),
+        "review_count": review,
+        "missing_printed": plan.missing_printed,
+        "skipped_pdf": plan.skipped_pdf,
+        "text_notes": [
+            {"printed": p.printed, "pdf_index": p.pdf_index, "file": p.text_file, "note": p.text_note}
+            for p in plan.pages
+            if p.text_note
+        ],
+    }
+    out = settings.reports_path / "team_import" / f"apply_{plan.key}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    return (
+        f"[{plan.key}] 반입 완료 book={book_id} run={run_id}({status}) pages={len(new_pages)} "
+        f"review={review} 리포트={out}"
+    )
 
 
 # ---------- 출력 ----------
@@ -405,9 +479,15 @@ def summarize(plan: BookPlan) -> list[str]:
         lines.append(f"  없는 쪽: {m['printed']}쪽 — {m['reason']}")
     for p in rev:
         lines.append(f"  REVIEW_REQUIRED: PDF {p.pdf_index}장 = {p.printed}쪽 — {p.reason}")
+    for p in plan.pages:
+        for m in p.missing_before:
+            lines.append(f"  앞쪽 누락 기록: PDF {p.pdf_index}장 = {p.printed}쪽 (앞에 {m['printed']}쪽 없음)")
     for p in ext:
-        if len(p.covers_pages) > 1 or p.text_file and not p.text_file.endswith(f"-{p.printed}p.txt"):
-            lines.append(f"  특수 텍스트: PDF {p.pdf_index}장 = {p.printed}쪽 ← {p.text_file} (덮는 쪽 {p.covers_pages})")
+        if p.text_note or len(p.covers_pages) > 1:
+            lines.append(
+                f"  특수 텍스트: PDF {p.pdf_index}장 = {p.printed}쪽 ← {p.text_file} "
+                f"(덮는 쪽 {p.covers_pages}, 줄 {p.text_lines or '전체'}) {p.text_note or ''}"
+            )
         if p.footer_check and p.footer_check.startswith("mismatch"):
             lines.append(f"  쪽번호 불일치 의심: PDF {p.pdf_index}장 = {p.printed}쪽, 텍스트 끝 {p.footer_check}")
     for e in plan.errors:
@@ -421,11 +501,20 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--dry-run", action="store_true", help="계획만 출력·저장(기본)")
     mode.add_argument("--apply", action="store_true", help="이미지·텍스트 저장 + DB INSERT")
     mode.add_argument("--preview", metavar="KEY:장,장", help="쪽번호 대조용 저해상도 띠 이미지 (예: subject3:84,85)")
-    ap.add_argument("--only", metavar="KEY", help="이 과목만 (예: subject1)")
+    ap.add_argument(
+        "--subject", metavar="KEY[,KEY]", help="대상 과목 page_map key (예: subject1, subject2,subject3, all). --apply에는 필수"
+    )
     args = ap.parse_args(argv)
+    if args.apply and not args.subject:
+        ap.error("--apply에는 --subject가 필요합니다(예: --subject subject1, 전체는 --subject all)")
 
     settings = get_settings()
     books_cfg = load_map(settings)["books"]
+    if args.subject and args.subject != "all":
+        keys = args.subject.split(",")
+        if unknown := set(keys) - {c["key"] for c in books_cfg}:
+            ap.error(f"page_map에 없는 과목: {sorted(unknown)}")
+        books_cfg = [c for c in books_cfg if c["key"] in keys]
 
     if args.preview:
         key, _, idx = args.preview.partition(":")
@@ -433,8 +522,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"미리보기 저장: {preview(settings, cfg, [int(x) for x in idx.split(',')])}")
         return 0
 
-    if args.only:
-        books_cfg = [c for c in books_cfg if c["key"] == args.only]
     plans = [plan_book(settings, c) for c in books_cfg]
     for plan in plans:
         print("\n".join(summarize(plan)))
