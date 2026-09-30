@@ -93,8 +93,49 @@ def run_pipeline(
     stage_list: Sequence[Stage] = DEFAULT_STAGES,
     pipeline_extra: dict | None = None,
 ) -> dict[str, int]:
-    """실행 1건의 페이지들을 순서대로 처리하고 processing_runs에 집계를 기록한다."""
+    """실행 1건의 페이지들을 순서대로 처리하고 processing_runs에 집계를 기록한다.
+
+    Ctrl+C(KeyboardInterrupt) 등으로 중간에 끊기면 run을 RUNNING으로 남기지 않고 FAILED로 닫은 뒤 다시 던진다.
+    끊긴 페이지는 상태를 바꾸지 않으므로(마지막으로 끝난 상태 유지) 다시 실행하면 이어서 처리된다.
+    """
     counts = {"DONE": 0, "INCOMPLETE": 0, "REVIEW_REQUIRED": 0, "FAILED": 0}
+    interrupted: BaseException | None = None
+    try:
+        _process_pages(pool, settings, storage, run_id, page_ids, stage_list, pipeline_extra, counts)
+    except BaseException as e:  # KeyboardInterrupt, SystemExit 등(일반 예외는 페이지 단위로 이미 잡힌다)
+        interrupted = e
+        log.warning("실행 중단 run_id=%s %s counts=%s", run_id, type(e).__name__, counts)
+
+    try:
+        with pool.connection() as conn:
+            status = runs_repo.finish_run(
+                conn,
+                settings,
+                run_id,
+                success=counts["DONE"],
+                review=counts["REVIEW_REQUIRED"],
+                failure=counts["FAILED"],
+                incomplete=counts["INCOMPLETE"],
+                interrupted=interrupted is not None,
+            )
+        log.info("처리 완료 run_id=%s status=%s counts=%s", run_id, status, counts)
+    except Exception:
+        log.exception("실행 집계 기록 실패 run_id=%s", run_id)
+    if interrupted is not None:
+        raise interrupted
+    return counts
+
+
+def _process_pages(
+    pool: ConnectionPool,
+    settings: Settings,
+    storage: Storage,
+    run_id: UUID,
+    page_ids: Sequence[UUID],
+    stage_list: Sequence[Stage],
+    pipeline_extra: dict | None,
+    counts: dict[str, int],
+) -> None:
     for page_id in page_ids:
         try:
             with pool.connection() as conn:
@@ -115,19 +156,3 @@ def run_pipeline(
         except Exception:
             log.exception("페이지 처리 준비 실패 page_id=%s", page_id)
             counts["FAILED"] += 1
-
-    try:
-        with pool.connection() as conn:
-            status = runs_repo.finish_run(
-                conn,
-                settings,
-                run_id,
-                success=counts["DONE"],
-                review=counts["REVIEW_REQUIRED"],
-                failure=counts["FAILED"],
-                incomplete=counts["INCOMPLETE"],
-            )
-        log.info("처리 완료 run_id=%s status=%s counts=%s", run_id, status, counts)
-    except Exception:
-        log.exception("실행 집계 기록 실패 run_id=%s", run_id)
-    return counts

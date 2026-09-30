@@ -12,13 +12,16 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from psycopg import sql
+from psycopg.rows import dict_row
 
 from app.api.deps import get_storage
 from app.ingestion import ocr
 from app.ingestion.ocr import OcrLine, OcrResult
-from app.ingestion.pipeline import DEFAULT_STAGES, Stage
+from app.db.connection import create_pool
+from app.ingestion.pipeline import DEFAULT_STAGES, Stage, run_pipeline
 from app.ingestion.stages import NeedsReview, ocr_key
 from app.main import create_app
+from app.repositories import runs as runs_repo
 from app.storage.local import LocalStorage
 
 SUBJECT = "__pytest_subject__"
@@ -278,3 +281,52 @@ def test_personal_note_needs_review(db_conn, tmp_path, cleanup, fake_ocr):
     page = run["pages"][0]
     assert page["processing_status"] == "REVIEW_REQUIRED" and page["review_required"]
     assert page["pipeline"] == {**page["pipeline"], "stage": "extract_text", "reason": "손필기 추출 미구현"}
+
+
+def _interrupt_second_page(ctx):
+    # 업로드 순서 1번 페이지 처리 중에 Ctrl+C가 들어온 것처럼 만든다.
+    idx = ctx.conn.execute(
+        sql.SQL("SELECT (page_metadata->>'upload_index')::int FROM {}.pages WHERE id = %s").format(
+            sql.Identifier(ctx.settings.db_schema)
+        ),
+        (ctx.page_id,),
+    ).fetchone()[0]
+    if idx == 1:
+        raise KeyboardInterrupt
+
+
+def test_interrupted_run_closes_as_failed(db_conn, settings, tmp_path, cleanup):
+    """중간에 끊긴 실행은 RUNNING으로 남지 않고 FAILED로 닫히며, 끊긴 페이지 상태는 그대로다."""
+    client, storage = _client(tmp_path)
+    with client:
+        book = _create_book(client, cleanup)
+        files = [("files", (f"{i}.png", _png(), "image/png")) for i in range(3)]
+        body = client.post(f"/books/{book['id']}/pages", files=files).json()
+        cleanup["runs"].append(UUID(body["run_id"]))
+        page_ids = [UUID(p["id"]) for p in client.get(f"/processing-runs/{body['run_id']}").json()["pages"]]
+
+    run_id = runs_repo.create_run(db_conn, settings, pipeline_version="test", page_count=len(page_ids))
+    cleanup["runs"].append(run_id)
+    pool = create_pool(settings)
+    pool.open()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run_pipeline(pool, settings, storage, run_id, page_ids, stage_list=_stages(embed=_interrupt_second_page))
+    finally:
+        pool.close()
+
+    run = runs_repo.get_run(db_conn, settings, run_id)
+    assert run["status"] == "FAILED" and run["finished_at"] is not None
+    assert (run["success_count"], run["review_count"], run["failure_count"]) == (1, 0, 0)
+    statuses = {r["id"]: r["processing_status"] for r in _page_statuses(db_conn, settings, page_ids)}
+    assert statuses[page_ids[0]] == "EMBEDDED"
+    assert statuses[page_ids[1]] == "VERIFIED"  # embed 도중 끊김 → 마지막으로 끝난 상태 유지
+    assert statuses[page_ids[2]] == "EMBEDDED"  # 첫 실행 결과 그대로(두 번째 실행은 도달 못 함)
+
+
+def _page_statuses(db_conn, settings, page_ids):
+    q = sql.SQL("SELECT id, processing_status FROM {}.pages WHERE id = ANY(%s)").format(
+        sql.Identifier(settings.db_schema)
+    )
+    with db_conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(q, (page_ids,)).fetchall()

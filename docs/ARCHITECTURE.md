@@ -15,7 +15,7 @@ adsp-study-rag/
 │   │   ├── repositories/  # books / pages / runs SQL (스키마는 Identifier로 명시)
 │   │   ├── storage/       # Storage 인터페이스, local(구현), s3(자리만), get_storage()
 │   │   ├── ingestion/     # images(업로드 검증·decode_bgr), ocr(PaddleOCR 엔진), pipeline(단계 실행·상태 갱신), stages(단계 함수), chunking(청킹 규칙), embedding(BGE-M3), team_import, run_stages
-│   │   └── retrieval/     # search(v_searchable_theory 벡터 검색)
+│   │   └── retrieval/     # search(v_searchable_theory 벡터 검색), evaluate(검색 평가)
 │   │   # 이후 추가 예정: judge, llm
 │   ├── migrations/   # 번호 붙은 SQL 파일 (DDL 변경 이력)
 │   └── tests/        # DB 테스트는 접속 불가 시 skip
@@ -91,6 +91,7 @@ adsp-study-rag/
   - 단계가 `NeedsReview`를 던지면 REVIEW_REQUIRED(review_required=true) 후 그 페이지 중단, 그 밖의 예외는 FAILED
   - 현재 단계·오류·사유·갱신 시각은 page_metadata.pipeline에 기록
   - run 집계: 전부 성공 SUCCESS / 전부 실패 FAILED / 그 외 PARTIAL
+  - 실행이 Ctrl+C(KeyboardInterrupt) 등으로 끊기면 `run_pipeline`이 run을 FAILED로 닫고(그때까지 개수 기록) 다시 던진다. 끊긴 페이지는 마지막으로 끝난 상태 유지 → 같은 명령 재실행으로 복구. 프로세스 강제 종료(창 닫기·kill)는 잡을 수 없어 RUNNING으로 남을 수 있다
 - 구현된 단계: extract_text(인쇄체 PaddleOCR, D-013), chunk_theory(D-019), embed(이론 청크만, D-020). detect_visuals는 `StageNotImplemented` → 업로드 경로의 기본 파이프라인은 여전히 EXTRACTED에서 멈추고 `pipeline.stopped="not_implemented"`, run은 PARTIAL.
 - 이후 단계만 다시 돌리기(2026-09-30): `python -m app.ingestion.run_stages`(dry-run 기본, `--apply --subject KEY|all` / `--book-id`, `--stages chunk|embed|chunk,embed`, `--pages`). detect_visuals는 건너뛰고 `page_metadata.pipeline.skipped=["detect_visuals"]` 기록, chunk_theory 후 VERIFIED, embed 후 EMBEDDED(D-019). `run_pipeline`의 `pipeline_extra`로 기록.
 - chunk_theory: 추출 결과(`.text.json`의 text 또는 `.ocr.json`의 lines) → `chunking.chunk_page`(순수 함수) → 페이지 단위 트랜잭션으로 theory_chunks·excluded_sections(exam_question) 삭제 후 재삽입, `page_metadata.chunking`(end_state = 다음 페이지가 이어받을 제목 경로). 앞 페이지 상태는 같은 book의 upload_index 직전 페이지에서 읽는다.
@@ -158,17 +159,17 @@ adsp-study-rag/
 - 키워드 검색 보강 후보: Kiwi(kiwipiepy) 형태소 기반, 또는 BGE-M3 sparse(lexical) 출력. 현재 인덱스인 trgm(clean_text)과 비교.
 - 위 후보는 **모두 미검증**이다. 채택·버전·라이선스·차원은 해당 구현 세션에서 공식 자료(모델 카드, PyPI)로 확인한 뒤 DECISIONS에 기록한다. 비교는 아래 "검색 평가"의 같은 질문 세트로 한다.
 
-### 검색 평가 (설계, 2026-09-30)
+### 검색 평가 (구현 2026-09-30)
 - 질문 세트 파일: `data/eval/questions.csv` (data/는 gitignore, 커밋 안 함). 질문은 사용자가 20~30개 작성.
   - 형식: UTF-8 CSV(엑셀은 "CSV UTF-8"로 저장), 머리행 `id,question,subject,pages,note`
     - `subject`: 정답 과목(page_map key `subject1`~`subject3`)
     - `pages`: 정답 인쇄 쪽번호, 여러 개는 `|`로 구분(예: `18|19`). **비워 두면 "자료에 없는 질문"**(확인 불가 임계값 평가용)
     - `note`: 메모(선택)
   - 예: `q01,DIKW 피라미드에서 지혜란?,subject1,18,`
-- 평가 스크립트(구현 예정): 질문마다 검색 → 상위 K개 청크 중 정답 과목 book의 정답 쪽 청크가 있으면 적중.
-  - hit@1 / hit@3 / hit@K(과목별·전체), 정답 청크 순위
-  - "확인 불가" 임계값 후보별(예: 1위 점수 0.40~0.60): 답할 수 있는 질문 중 통과 비율, 자료에 없는 질문 중 차단 비율
-  - 결과는 `data/reports/eval/`에 저장하고, 설정(임베딩 모델·리랭커·키워드 검색·N/K) + 요약 수치를 PROGRESS "자체 평가 메모"에 기록
+- 평가 스크립트 `python -m app.retrieval.evaluate`(`--questions`, `--k`, `--check`=형식 검사만). 설정 `EVAL_QUESTIONS_PATH`, `EVAL_RANK_DEPTH`(정답 순위 찾는 깊이 20), `EVAL_THRESHOLDS`. 질문마다 검색 → 상위 K개 청크 중 정답 과목 book의 정답 쪽 청크가 있으면 적중.
+  - hit@1 / hit@3 / hit@K(과목별·전체), 정답 청크 순위, MRR, K 안에 정답 없는 질문 id
+  - "확인 불가" 임계값 후보별(1위 점수 ≥ t면 통과): 답할 수 있는 질문 중 통과 비율(+통과하면서 K 안에 정답 있는 비율), 자료에 없는 질문 중 차단 비율
+  - 결과는 `data/reports/eval/{시각}.json`(질문별 상위 결과)·`.txt`(요약)에 저장하고, 설정(임베딩 모델·리랭커·키워드 검색·N/K) + 요약 수치를 PROGRESS "자체 평가 메모"에 기록
 - 임베딩 모델·리랭커·키워드 검색을 바꿀 때마다 같은 세트로 다시 돌려 비교한다.
 
 ## 판정기 (교체 가능 모듈)

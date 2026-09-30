@@ -39,7 +39,8 @@
 | 임베딩 모델 저장 위치 | `.env` | `EMBEDDING_MODEL_DIR` (HF_HOME으로 전달, 현재 `E:\hf_models`, 비우면 C:) | 첫 실행 후 그 폴더 아래 `hub/models--BAAI--bge-m3` |
 | 임베딩 속도·메모리 | `.env` | `EMBEDDING_BATCH_SIZE`(8), `EMBEDDING_MAX_SEQ_LENGTH`(1024 토큰, 넘으면 잘림) | `run_stages --stages embed --pages 14,15` 실행 시간 |
 | 검색 개수(Top-K) | `.env` | `SEARCH_TOP_K`(5) | `cd backend; uv run python -m app.retrieval.search "질문"` |
-| 청킹·임베딩 다시 돌리기 | 명령 | `cd backend; uv run python -m app.ingestion.run_stages --apply --subject all` (청킹, VERIFIED) / `--stages embed` (임베딩, EMBEDDED) / `--stages chunk,embed` / `--pages 14,15`로 쪽 제한 / 업로드 자료는 `--book-id` | DataGrip: `mingyu.theory_chunks`, `pages.page_metadata.chunking` |
+| 검색 평가 질문 세트·임계값 후보 | `.env` / `data/eval/questions.csv` | `EVAL_QUESTIONS_PATH`(질문 CSV, 형식은 ARCHITECTURE "검색 평가"), `EVAL_RANK_DEPTH`(20, 정답 순위 찾는 깊이), `EVAL_THRESHOLDS`(0.40,0.45,0.50,0.55,0.60) | `cd backend; uv run python -m app.retrieval.evaluate --check`(형식만) → `uv run python -m app.retrieval.evaluate` → `data/reports/eval/` |
+| 청킹·임베딩 다시 돌리기 | 명령 | `cd backend; uv run python -m app.ingestion.run_stages --apply --subject all` (청킹, VERIFIED) / `--stages embed` (임베딩, EMBEDDED) / `--stages chunk,embed` / `--pages 14,15`로 쪽 제한 / 업로드 자료는 `--book-id`. Ctrl+C로 끊으면 그 run은 FAILED로 닫히고, 같은 명령을 다시 실행하면 됨 | DataGrip: `mingyu.theory_chunks`, `pages.page_metadata.chunking` |
 | DB 구조(컬럼·테이블 추가) | `backend/migrations/` | 새 번호 파일(`003_...sql`) 추가. 적용된 파일은 수정 금지, 팀 규격 컬럼은 추가만 | `cd backend; uv run python -m app.db.migrate --dry-run` → 사용자 확인 → `uv run python -m app.db.migrate` |
 
 ## 2. 아직 없는 기능 (구현하면 채운다)

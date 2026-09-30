@@ -19,7 +19,7 @@ from app.ingestion.embedding import get_embedder, to_pgvector
 def search_theory(conn: psycopg.Connection, settings: Settings, query_vec: str, k: int) -> list[dict]:
     """cosine 거리(<=>) 순으로 k개. query_vec은 pgvector 텍스트(정규화된 질문 벡터)."""
     q = sql.SQL(
-        "SELECT t.id, t.title, t.clean_text, t.exam_clues, p.printed_page_number, b.title AS book_title, "
+        "SELECT t.id, t.title, t.clean_text, t.exam_clues, p.printed_page_number, p.book_id, b.title AS book_title, "
         "  1 - (t.embedding <=> %s::public.vector) AS score "
         "FROM {s}.v_searchable_theory t "
         "JOIN {s}.pages p ON p.id = t.page_id JOIN {s}.books b ON b.id = p.book_id "

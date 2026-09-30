@@ -12,7 +12,7 @@ extract_text는 다시 하지 않고(팀 텍스트·OCR 결과를 그대로 읽�
 - 대상 페이지: processing_status가 EXTRACTED / VERIFIED / EMBEDDED인 페이지(upload_index 순서).
   REVIEW_REQUIRED·FAILED·RAW는 건드리지 않고 개수만 알려 준다.
 - chunk_theory가 끝나면 VERIFIED. 기존 청크는 페이지 단위 트랜잭션으로 지우고 다시 넣는다(임베딩도 사라짐).
-- --apply는 자료(book)마다 processing_runs 1건을 만든다.
+- --apply는 자료(book)마다 processing_runs 1건을 만든다. Ctrl+C로 끊으면 그 run은 FAILED로 닫힌다.
 - dry-run 리포트: {REPORTS_DIR}/chunking/{key}.json (청크 전체), {key}.txt (사람이 읽는 표본)
 """
 
@@ -225,13 +225,18 @@ def main(argv: list[str] | None = None) -> int:
                     others[p["processing_status"]] = others.get(p["processing_status"], 0) + 1
             plans.append((t, todo, others))
 
-    for t, todo, others in plans:
-        print(f"[{t.key}] {t.title}: 대상 {len(todo)}쪽" + (f", 제외 {others}" if others else ""))
-        if not args.apply and "chunk" in args.stages:
-            summary = dry_run(settings, storage, t, todo)
-            print("  " + json.dumps({k: v for k, v in summary.items() if k != "params"}, ensure_ascii=False))
-        else:
-            print("  " + json.dumps(apply(settings, storage, t, todo, STAGE_SETS[args.stages]), ensure_ascii=False))
+    try:
+        for t, todo, others in plans:
+            print(f"[{t.key}] {t.title}: 대상 {len(todo)}쪽" + (f", 제외 {others}" if others else ""))
+            if not args.apply and "chunk" in args.stages:
+                summary = dry_run(settings, storage, t, todo)
+                print("  " + json.dumps({k: v for k, v in summary.items() if k != "params"}, ensure_ascii=False))
+            else:
+                print("  " + json.dumps(apply(settings, storage, t, todo, STAGE_SETS[args.stages]), ensure_ascii=False))
+    except KeyboardInterrupt:
+        # 진행 중이던 run은 run_pipeline이 FAILED로 닫았다. 끊긴 페이지는 마지막으로 끝난 상태 그대로다.
+        print("중단됨(Ctrl+C): 진행 중이던 run은 FAILED로 기록. 같은 명령을 다시 실행하면 된다(덮어써도 안전).")
+        return 130
     if not args.apply:
         print(f"dry-run: DB 변경 없음. 청크 설정 {asdict(stages.chunk_params(settings))}")
     return 0

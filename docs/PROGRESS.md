@@ -1,6 +1,6 @@
 # PROGRESS
 
-## 현재 상태 (2026-09-30 청킹·임베딩·설계 보완 세션 종료 기준)
+## 현재 상태 (2026-09-30 전체 임베딩 확인·검색 평가 스크립트 세션 기준)
 - 환경·문서: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
   - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`(C 여유 부족). 새 터미널부터 적용
 - 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev 키는 사용자가 .env에 넣음(TYPESAFE_API_KEY, JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS — 코드에서는 아직 안 씀, 값 미확인). S3 미확인 → STORAGE_BACKEND=local
@@ -10,12 +10,13 @@
   - **extract_text 구현 완료(D-013)**: 인쇄체 → PaddleOCR(`app/ingestion/ocr.py`, PP-OCRv5_mobile_det + korean_PP-OCRv5_mobile_rec, CPU, oneDNN 끔). 결과 JSON은 저장소 `books/{book_id}/{page_id}.ocr.json`, 요약은 page_metadata.ocr. personal_note는 REVIEW_REQUIRED("손필기 추출 미구현")
   - **팀 교재 반입(D-014, D-018)**: `app/ingestion/team_import.py` (`--dry-run` 기본 / `--preview` / `--apply --subject`). 매핑은 `data/raw/adsp/page_map.json`, 텍스트는 저장소 `books/{book_id}/{page_id}.text.json`(engine=team_text, 원문 그대로), 요약은 page_metadata.text, 리포트는 `data/reports/team_import/`
   - **청킹 완료(D-019)**: `app/ingestion/chunking.py` + `stages.chunk_theory`. 팀 교재 324쪽 전부 VERIFIED(`pipeline.skipped=["detect_visuals"]`). theory_chunks 1과목 92 / 2과목 122 / 3과목 402(needs_review 11: R 출력·그림 조각), excluded_sections(exam_question, 원문 위치 포함) 24 / 21 / 42
-  - **임베딩 구현(D-020)**: `app/ingestion/embedding.py`(BGE-M3, sentence-transformers 6.1.0, torch CPU, 정규화, 캐시 `E:\hf_models` 4.3GB) + `stages.embed`. 시험으로 1과목 14~20쪽(7쪽) EMBEDDED(36초, 모델 로딩 포함) 후 **전체 임베딩 실행 중**(사용자가 옆 창에서 `--stages embed --subject all` 실행, 세션 종료 시점에 미완료). **완료 확인은 다음 세션 시작 시 DB 카운트로**(아래 다음 작업 1번)
-  - 실행 진입점: `python -m app.ingestion.run_stages`(dry-run 기본, `--apply --subject`, `--stages chunk|embed|chunk,embed`, `--pages`). 검색 확인: `python -m app.retrieval.search "질문"`(v_searchable_theory)
+  - **임베딩 완료(D-020)**: `app/ingestion/embedding.py`(BGE-M3, sentence-transformers 6.1.0, torch CPU, 정규화, 캐시 `E:\hf_models` 4.3GB) + `stages.embed`. **팀 교재 324쪽 전부 EMBEDDED**, v_searchable_theory 605행, 검색 대상인데 임베딩 없는 청크 0. 전체 실행 시간(processing_runs started_at~finished_at, 1과목에 모델 로딩 포함) 1과목 1분49초 / 2과목 2분35초 / 3과목 7분45초
+  - 실행 진입점: `python -m app.ingestion.run_stages`(dry-run 기본, `--apply --subject`, `--stages chunk|embed|chunk,embed`, `--pages`). Ctrl+C 등으로 끊기면 run을 FAILED로 닫음(창 닫기·kill은 RUNNING으로 남을 수 있음). 검색 확인: `python -m app.retrieval.search "질문"`(v_searchable_theory)
+  - **검색 평가 스크립트**: `python -m app.retrieval.evaluate`(`--questions`, `--k`, `--check`). hit@1/3/K·MRR(과목별·전체) + 임계값별 통과·차단 → `data/reports/eval/`. 예시 6문항(`data/eval/questions.sample.csv`)으로 동작 확인, **실제 질문 세트(`data/eval/questions.csv`)는 사용자 작성 대기**
   - detect_visuals는 `StageNotImplemented` → 업로드 경로 기본 파이프라인은 여전히 **EXTRACTED에서 멈춤**
   - 모델 캐시: `OCR_MODEL_DIR=E:\paddle_models` (현재 19MB, 쓰는 모델 2개만)
   - 속도(맑은 고딕으로 만든 A4 30줄): 1장 약 16초, 평균 신뢰도 0.994. **실제 교재 스캔으로는 아직 미측정**
-- 테스트: `uv run pytest` 68개 통과(가짜 OCR·가짜 임베더, 청킹 규칙 10개 포함), `-m ocr_model` 1개, `-m embedding_model` 1개(실제 BGE-M3) 통과
+- 테스트: `uv run pytest` 75개 통과(가짜 OCR·가짜 임베더, 청킹 규칙 10개, 실행 중단 1개, 평가 계산 6개 포함), `-m ocr_model` 1개, `-m embedding_model` 1개(실제 BGE-M3) 통과
 - 프론트엔드: 미생성
 - 문서: 설계 보완(오답노트·검수 도구·시각자료 표시 원칙·팀 교재 반입·crop 계획, D-014~D-017). 사용자용 문서 `docs/sessions/`(세션별 설명), `docs/MODIFY_GUIDE.md`(수정 위치 표) — 세션 시작 시 읽지 않음
 - 팀 방향(D-021): 공용 프론트 없이 각자 개인 프로젝트. 팀 규격 테이블 "기존 컬럼 변경 금지·추가만" 유지, mingyu_app·API는 자유
@@ -23,10 +24,10 @@
 
 ## 다음 작업 (2026-09-30 방향 조정: 텍스트 end-to-end 우선)
 설계는 ARCHITECTURE의 "질의 흐름"(검색 단계 상세, 검색 평가), "이론 보충·수정", "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-021 참고.
-1. **[다음 세션] 전체 임베딩 + 검색 평가 세트·스크립트**
-   - **전체 임베딩은 실행 중(세션 종료 시점 미완료)**. 세션 시작 시 DB 카운트로 완료 확인: `pages` 상태별 개수(324쪽 모두 EMBEDDED인지), `v_searchable_theory` 행 수(기대 605 = 청크 616 − needs_review 11), `theory_chunks`에서 needs_review=false인데 embedding IS NULL인 행 0개. 덜 됐거나 FAILED가 있으면 `cd backend; uv run python -m app.ingestion.run_stages --apply --subject all --stages embed` 재실행(덮어써도 안전). 실행 시간은 옆 창 출력 또는 processing_runs(started_at/finished_at)로 기록
-   - 사용자가 질문 20~30개 작성: `data/eval/questions.csv`(형식은 ARCHITECTURE "검색 평가", 자료에 없는 질문도 몇 개 포함)
-   - 평가 스크립트: hit@1/3/K(과목별·전체) + "확인 불가" 임계값 후보별 통과·차단 비율 → 결과를 아래 "자체 평가 메모"에 기록(시험 7쪽 참고값: 관련 0.53~0.75, 없는 주제 최고 0.42)
+1. **[다음 세션] 검색 평가 실행**
+   - (사용자) `data/eval/questions.csv` 작성: 20~30개, 과목별 고르게, 자료에 없는 질문 몇 개 포함(ADsP와 가까운 주제도 넣기 — 예시에서 "트랜스포머 셀프 어텐션"이 0.524로 교재 질문 DIKW(0.515)보다 높았음). 형식 검사 `cd backend; uv run python -m app.retrieval.evaluate --check`
+   - 평가 실행 → 결과를 아래 "자체 평가 메모"에 기록, 틀린 질문은 리포트 json의 `top`으로 원인 확인(청킹 문제인지, 질문 표현 문제인지)
+   - 점수 하나로 확인 불가를 가르기 어려우면 2번의 답변 가능 판정(can_answer)·리랭커로 넘기는 것을 전제로 임계값은 느슨하게 잡는다
    - 필요하면 청킹 규칙 보완(2과목 101쪽 첫 줄 기출 조각 등, D-019 알려진 한계)
 2. 질의 흐름 + 판정(Jev) + 리랭커 비교
    - 검색 → 답변 가능 판정 → 답변 생성(근거 인용) → 근거 일치 판정, `JUDGE_PROVIDER=none`에서도 끝까지 동작
@@ -66,7 +67,7 @@
 - 효율성:
 - 미비점:
 - 단점:
-- 검색 평가(hit@K, "확인 불가" 임계값): 평가 스크립트 구현 후 기록. 형식: 날짜 / 설정(임베딩 모델, 리랭커, 키워드 검색, N/K) / 질문 수 / hit@1·3·K / 임계값별 통과·차단
+- 검색 평가(hit@K, "확인 불가" 임계값): 2026-09-30 예시 6문항(답 가능 4, 자료 없음 2) 동작 확인용 — BGE-M3, 리랭커·키워드 없음, K=5: hit@1 3/4, hit@3·@5 4/4, 1위 점수 답 가능 0.515~0.794 / 자료 없음 0.338, 0.524(겹침). 표본이 작아 결론 아님, 실제 세트로 다시 기록. 형식: 날짜 / 설정(임베딩 모델, 리랭커, 키워드 검색, N/K) / 질문 수 / hit@1·3·K / 임계값별 통과·차단
 
 ## 완료 기록
 - 2026-09-29: 저장소 초기 구조, uv 환경, GitHub 연결, 운영 문서 5종, Gemini 모델 확인
@@ -78,3 +79,4 @@
 - 2026-09-30: 사용자용 문서 — docs/sessions/00-overview.md(백엔드 개요), docs/MODIFY_GUIDE.md(수정 위치 표), CLAUDE.md 규칙 추가(조정 값은 .env/config.py, 프롬프트는 backend/app/prompts/), /wrap 명령 갱신(세션 설명 파일 작성)
 - 2026-09-30: 청킹·임베딩 — chunk_theory(머리말/쪽번호 제외, 제목 경로 이어받기, exam_clues, 기출 문제 블록 제외, 짧은 비한글 조각 needs_review), run_stages 진입점, 팀 교재 324쪽 청킹(VERIFIED), BGE-M3 임베딩(sentence-transformers, E: 캐시) + 1과목 7쪽 시험 임베딩·검색 확인 (D-019, D-020, 테스트 68+2개)
 - 2026-09-30: 설계 보완(코드 변경 없음) — 팀 방향 변경(D-021, 공용 프론트 없음), 이론 보충·수정 설계, 검색 단계 리랭커·키워드 후보(미검증), 검색 평가 세트 형식, 다음 작업 순서 재조정(텍스트 end-to-end 우선). 전체 임베딩은 세션 종료 시점 실행 중
+- 2026-09-30: 전체 임베딩 완료 확인(324쪽 EMBEDDED, 검색 가능 605), 실행 중단 시 run FAILED로 닫기, 검색 평가 스크립트(hit@K·MRR·임계값별 통과/차단) + 예시 6문항 검증, /start에서 RUNNING run은 "실행 중일 수 있음"으로 보고 (테스트 75+2개)
