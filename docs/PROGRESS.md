@@ -1,6 +1,6 @@
 # PROGRESS
 
-## 현재 상태 (2026-09-30 청킹·임베딩 세션 기준)
+## 현재 상태 (2026-09-30 청킹·임베딩·설계 보완 세션 종료 기준)
 - 환경·문서: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
   - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`(C 여유 부족). 새 터미널부터 적용
 - 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev 키는 사용자가 .env에 넣음(TYPESAFE_API_KEY, JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS — 코드에서는 아직 안 씀, 값 미확인). S3 미확인 → STORAGE_BACKEND=local
@@ -10,7 +10,7 @@
   - **extract_text 구현 완료(D-013)**: 인쇄체 → PaddleOCR(`app/ingestion/ocr.py`, PP-OCRv5_mobile_det + korean_PP-OCRv5_mobile_rec, CPU, oneDNN 끔). 결과 JSON은 저장소 `books/{book_id}/{page_id}.ocr.json`, 요약은 page_metadata.ocr. personal_note는 REVIEW_REQUIRED("손필기 추출 미구현")
   - **팀 교재 반입(D-014, D-018)**: `app/ingestion/team_import.py` (`--dry-run` 기본 / `--preview` / `--apply --subject`). 매핑은 `data/raw/adsp/page_map.json`, 텍스트는 저장소 `books/{book_id}/{page_id}.text.json`(engine=team_text, 원문 그대로), 요약은 page_metadata.text, 리포트는 `data/reports/team_import/`
   - **청킹 완료(D-019)**: `app/ingestion/chunking.py` + `stages.chunk_theory`. 팀 교재 324쪽 전부 VERIFIED(`pipeline.skipped=["detect_visuals"]`). theory_chunks 1과목 92 / 2과목 122 / 3과목 402(needs_review 11: R 출력·그림 조각), excluded_sections(exam_question, 원문 위치 포함) 24 / 21 / 42
-  - **임베딩 구현(D-020)**: `app/ingestion/embedding.py`(BGE-M3, sentence-transformers 6.1.0, torch CPU, 정규화, 캐시 `E:\hf_models` 4.3GB) + `stages.embed`. **시험으로 1과목 14~20쪽(7쪽)만 EMBEDDED**(36초, 모델 로딩 포함). 나머지 317쪽은 VERIFIED
+  - **임베딩 구현(D-020)**: `app/ingestion/embedding.py`(BGE-M3, sentence-transformers 6.1.0, torch CPU, 정규화, 캐시 `E:\hf_models` 4.3GB) + `stages.embed`. 시험으로 1과목 14~20쪽(7쪽) EMBEDDED(36초, 모델 로딩 포함) 후 **전체 임베딩 실행 중**(사용자가 옆 창에서 `--stages embed --subject all` 실행, 세션 종료 시점에 미완료). **완료 확인은 다음 세션 시작 시 DB 카운트로**(아래 다음 작업 1번)
   - 실행 진입점: `python -m app.ingestion.run_stages`(dry-run 기본, `--apply --subject`, `--stages chunk|embed|chunk,embed`, `--pages`). 검색 확인: `python -m app.retrieval.search "질문"`(v_searchable_theory)
   - detect_visuals는 `StageNotImplemented` → 업로드 경로 기본 파이프라인은 여전히 **EXTRACTED에서 멈춤**
   - 모델 캐시: `OCR_MODEL_DIR=E:\paddle_models` (현재 19MB, 쓰는 모델 2개만)
@@ -18,21 +18,26 @@
 - 테스트: `uv run pytest` 68개 통과(가짜 OCR·가짜 임베더, 청킹 규칙 10개 포함), `-m ocr_model` 1개, `-m embedding_model` 1개(실제 BGE-M3) 통과
 - 프론트엔드: 미생성
 - 문서: 설계 보완(오답노트·검수 도구·시각자료 표시 원칙·팀 교재 반입·crop 계획, D-014~D-017). 사용자용 문서 `docs/sessions/`(세션별 설명), `docs/MODIFY_GUIDE.md`(수정 위치 표) — 세션 시작 시 읽지 않음
+- 팀 방향(D-021): 공용 프론트 없이 각자 개인 프로젝트. 팀 규격 테이블 "기존 컬럼 변경 금지·추가만" 유지, mingyu_app·API는 자유
 - 규칙 추가(CLAUDE.md): 조정 가능한 값은 `.env`/`config.py` 한 곳, LLM 프롬프트는 `backend/app/prompts/` 텍스트 파일. /wrap은 세션 설명 파일까지 작성
 
-## 다음 작업 (2026-09-30 청킹·임베딩 후 갱신)
-설계는 ARCHITECTURE의 "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-020 참고.
-1. **[다음 세션] 전체 임베딩 실행 + 검색 품질 확인**
-   - 사용자가 실행: `cd backend; uv run python -m app.ingestion.run_stages --apply --subject all --stages embed` (EMBEDDED 7쪽은 다시 덮어씀. 속도는 7쪽 36초 기준 전체 수 분~십수 분 예상, 실측 필요)
-   - 질문 10~20개(과목별)로 `python -m app.retrieval.search` → 1위 적중 여부, 점수 분포 기록 → "자료에서 확인 불가" 임계값 후보(시험 7쪽: 관련 0.53~0.75, 없는 주제 최고 0.42)
-   - 필요하면 하이브리드(clean_text trgm) 검토, 청킹 규칙 보완(2과목 101쪽 첫 줄 기출 조각 등, D-019 알려진 한계)
-2. 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽) (D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터)
-3. 그래프 포함 문제 10개로 추출 정확도 확인 (비전 LLM 텍스트화, D-015)
-4. crop 전체 확장 + 시각자료 설명문 생성 (Gemini, 재시도·폴백 D-010)
-5. 질의 흐름 + Jev 호출 테스트 — Jev 키는 받았으나 **어느 경로(TypeSafe 직접 / Cloudflare) 키인지 확인 필요**. 새 키 이름(JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS)을 config에 반영, 모델 이름은 공식 문서로 확인(추측 금지), D-007 갱신
-6. 오답노트 구현 (D-017, mingyu_app 마이그레이션은 사용자 확인 후)
-7. PaddleOCR(새 캡처용) 실제 교재 품질·속도 측정, 손필기(personal_note) 비전 LLM 추출
-8. 프론트 화면 3개 + 검수 탭
+## 다음 작업 (2026-09-30 방향 조정: 텍스트 end-to-end 우선)
+설계는 ARCHITECTURE의 "질의 흐름"(검색 단계 상세, 검색 평가), "이론 보충·수정", "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-021 참고.
+1. **[다음 세션] 전체 임베딩 + 검색 평가 세트·스크립트**
+   - **전체 임베딩은 실행 중(세션 종료 시점 미완료)**. 세션 시작 시 DB 카운트로 완료 확인: `pages` 상태별 개수(324쪽 모두 EMBEDDED인지), `v_searchable_theory` 행 수(기대 605 = 청크 616 − needs_review 11), `theory_chunks`에서 needs_review=false인데 embedding IS NULL인 행 0개. 덜 됐거나 FAILED가 있으면 `cd backend; uv run python -m app.ingestion.run_stages --apply --subject all --stages embed` 재실행(덮어써도 안전). 실행 시간은 옆 창 출력 또는 processing_runs(started_at/finished_at)로 기록
+   - 사용자가 질문 20~30개 작성: `data/eval/questions.csv`(형식은 ARCHITECTURE "검색 평가", 자료에 없는 질문도 몇 개 포함)
+   - 평가 스크립트: hit@1/3/K(과목별·전체) + "확인 불가" 임계값 후보별 통과·차단 비율 → 결과를 아래 "자체 평가 메모"에 기록(시험 7쪽 참고값: 관련 0.53~0.75, 없는 주제 최고 0.42)
+   - 필요하면 청킹 규칙 보완(2과목 101쪽 첫 줄 기출 조각 등, D-019 알려진 한계)
+2. 질의 흐름 + 판정(Jev) + 리랭커 비교
+   - 검색 → 답변 가능 판정 → 답변 생성(근거 인용) → 근거 일치 판정, `JUDGE_PROVIDER=none`에서도 끝까지 동작
+   - Jev 키는 받았으나 **어느 경로(TypeSafe 직접 / Cloudflare) 키인지 확인 필요**. 새 키 이름(JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS)을 config에 반영, 모델 이름은 공식 문서로 확인(추측 금지), D-007 갱신
+   - 리랭커·키워드 검색·임베딩 대안 후보(ARCHITECTURE "검색 단계 상세")를 공식 자료로 확인 후 같은 평가 세트로 비교
+3. 이론 보충·수정 (ARCHITECTURE "이론 보충·수정", material_type user_supplement·mingyu_app.chunk_corrections 마이그레이션은 사용자 확인 후)
+4. 간단한 프론트로 실사용 (공부 화면 B 중심 + 검수 탭 최소: 답변 피드백, 보충·수정 목록)
+5. 팀 텍스트 품질 비교: 몇 쪽(1과목 14쪽, 3과목 226쪽 등)을 팀 텍스트 / PaddleOCR mobile / Gemini 비전으로 뽑아 원본 이미지와 비교(정확도·누락·표/수식 처리, 속도·비용). 기존 "PaddleOCR 실제 교재 품질 측정"을 대체
+6. crop / 시각자료: 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽, D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터) → 그래프 포함 문제 10개로 추출 정확도 확인(D-015) → crop 전체 확장 + 설명문 생성(Gemini, 재시도·폴백 D-010)
+7. 오답노트 (D-017, mingyu_app 마이그레이션은 사용자 확인 후)
+8. 손필기(personal_note) 비전 LLM 추출
 - 틈틈이: 재처리 API(FAILED/REVIEW_REQUIRED/멈춘 페이지), 자료 삭제 시 저장 파일 정리, (사용자) S3 팀 버킷 유무 문의
 
 ## 막힌 것 / 확인 필요
@@ -61,6 +66,7 @@
 - 효율성:
 - 미비점:
 - 단점:
+- 검색 평가(hit@K, "확인 불가" 임계값): 평가 스크립트 구현 후 기록. 형식: 날짜 / 설정(임베딩 모델, 리랭커, 키워드 검색, N/K) / 질문 수 / hit@1·3·K / 임계값별 통과·차단
 
 ## 완료 기록
 - 2026-09-29: 저장소 초기 구조, uv 환경, GitHub 연결, 운영 문서 5종, Gemini 모델 확인
@@ -71,3 +77,4 @@
 - 2026-09-30: 팀 교재 반입 — pypdfium2(BSD-3/Apache-2.0), page_map.json 매핑(3과목 216쪽 누락·252쪽 중복 촬영 확인), 58/59쪽 합본 텍스트 줄 분할, 3권 324페이지 EXTRACTED 반입 (D-018, 테스트 56개 통과)
 - 2026-09-30: 사용자용 문서 — docs/sessions/00-overview.md(백엔드 개요), docs/MODIFY_GUIDE.md(수정 위치 표), CLAUDE.md 규칙 추가(조정 값은 .env/config.py, 프롬프트는 backend/app/prompts/), /wrap 명령 갱신(세션 설명 파일 작성)
 - 2026-09-30: 청킹·임베딩 — chunk_theory(머리말/쪽번호 제외, 제목 경로 이어받기, exam_clues, 기출 문제 블록 제외, 짧은 비한글 조각 needs_review), run_stages 진입점, 팀 교재 324쪽 청킹(VERIFIED), BGE-M3 임베딩(sentence-transformers, E: 캐시) + 1과목 7쪽 시험 임베딩·검색 확인 (D-019, D-020, 테스트 68+2개)
+- 2026-09-30: 설계 보완(코드 변경 없음) — 팀 방향 변경(D-021, 공용 프론트 없음), 이론 보충·수정 설계, 검색 단계 리랭커·키워드 후보(미검증), 검색 평가 세트 형식, 다음 작업 순서 재조정(텍스트 end-to-end 우선). 전체 임베딩은 세션 종료 시점 실행 중

@@ -14,11 +14,12 @@ adsp-study-rag/
 │   │   ├── db/            # connection.py(풀, scoped_transaction), migrate.py(마이그레이션 실행기)
 │   │   ├── repositories/  # books / pages / runs SQL (스키마는 Identifier로 명시)
 │   │   ├── storage/       # Storage 인터페이스, local(구현), s3(자리만), get_storage()
-│   │   └── ingestion/     # images(업로드 검증·decode_bgr), ocr(PaddleOCR 엔진, 지연 로딩·잠금), pipeline(단계 실행·상태 갱신), stages(단계 함수)
-│   │   # 이후 추가 예정: retrieval, judge, llm
+│   │   ├── ingestion/     # images(업로드 검증·decode_bgr), ocr(PaddleOCR 엔진), pipeline(단계 실행·상태 갱신), stages(단계 함수), chunking(청킹 규칙), embedding(BGE-M3), team_import, run_stages
+│   │   └── retrieval/     # search(v_searchable_theory 벡터 검색)
+│   │   # 이후 추가 예정: judge, llm
 │   ├── migrations/   # 번호 붙은 SQL 파일 (DDL 변경 이력)
 │   └── tests/        # DB 테스트는 접속 불가 시 skip
-├── frontend/         # React + Vite (미생성)
+├── frontend/         # React + Vite, 개인 프론트 (미생성, 공용 프론트 없음 D-021)
 ├── docs/
 └── data/             # 로컬 이미지/산출물 (gitignore)
 ```
@@ -42,6 +43,7 @@ adsp-study-rag/
 - 팀 공유 PostgreSQL 16.15, DB `cert_rag`, pgvector 0.8.6, pg_trgm 1.6, pgcrypto 1.3
 - 내 스키마: `mingyu` (팀 규격 테이블, 팀원이 생성 완료). 다른 스키마: jaewon, sugi, sumin (접근 금지)
 - 내 서비스용 스키마: `mingyu_app` (002 마이그레이션으로 생성, 2026-09-29)
+- 팀 방향(D-021): 공용 프론트 없이 각자 개인 프로젝트. 공유 DB의 팀 규격 테이블은 **기존 컬럼 변경 금지·추가만** 유지, `mingyu_app`과 API는 개인 설계로 자유롭게 정한다.
 - 확장은 모두 `public`에 설치됨 → 인덱스 연산자 클래스는 `public.gin_trgm_ops`처럼 명시
 
 ### mingyu 스키마 (팀 규격, 기존)
@@ -141,11 +143,33 @@ adsp-study-rag/
 
 ## 질의 흐름
 1. 입력: 질문 텍스트 또는 문제 이미지(비전 LLM으로 문제문·보기·수식 추출). 문제 속 그래프·표는 비전 LLM이 텍스트(축, 추세, 수치, 보기와의 관계)로 풀어내고, 이후 검색·판정은 이 텍스트로 한다(Jev는 이미지 입력 불가)
-2. 검색: 선택 과목 범위에서 하이브리드 검색(벡터 + trgm), 이론 → 연결된 시각자료·같은 페이지 표/수식 확장
+2. 검색: 선택 과목 범위에서 후보 N개(벡터 + 키워드) → 리랭커 → 상위 K개(아래 "검색 단계 상세"). 이론 → 연결된 시각자료·같은 페이지 표/수식 확장
 3. 답변 가능 판정(판정기): 근거로 답할 수 없으면 LLM 호출 없이 "자료에서 확인 불가"
 4. 답변 생성: 기본 시험모드 + 선택한 제약 프리셋, 근거 번호 인용 강제
 5. 근거 일치 판정(판정기): 낮으면 강한 모델 재생성 또는 "확신 낮음" 표시
 6. 저장: mingyu_app 상세 + query_logs 요약
+7. "자료에서 확인 불가"이면 이론 보충 입력으로 연결(아래 "이론 보충·수정")
+
+### 검색 단계 상세 (설계, 후보·미검증, 2026-09-30)
+- 현재 구현: 벡터 검색만(`app/retrieval/search.py`, v_searchable_theory, cosine, `SEARCH_TOP_K`).
+- 목표 구조: 벡터(+키워드) 후보 **N개** → 리랭커 → 상위 **K개**. N, K, 리랭커 모델 이름은 `.env` 설정값(이름 예: `SEARCH_CANDIDATE_N`, `SEARCH_TOP_K`, `RERANKER_MODEL`(비우면 리랭커 생략), `RERANKER_MAX_LENGTH`).
+- 리랭커 후보: `BAAI/bge-reranker-v2-m3`, `dragonkue/bge-reranker-v2-m3-ko`(한국어 미세조정, Apache-2.0로 알려짐). `max_length` 1024 권장.
+- 임베딩 대안 후보: `dragonkue/BGE-m3-ko` — 차원이 1024인지 확인 필요. 같으면 `EMBEDDING_MODEL` 교체 + 재임베딩만으로 비교 가능(DB 컬럼 vector(1024)는 그대로).
+- 키워드 검색 보강 후보: Kiwi(kiwipiepy) 형태소 기반, 또는 BGE-M3 sparse(lexical) 출력. 현재 인덱스인 trgm(clean_text)과 비교.
+- 위 후보는 **모두 미검증**이다. 채택·버전·라이선스·차원은 해당 구현 세션에서 공식 자료(모델 카드, PyPI)로 확인한 뒤 DECISIONS에 기록한다. 비교는 아래 "검색 평가"의 같은 질문 세트로 한다.
+
+### 검색 평가 (설계, 2026-09-30)
+- 질문 세트 파일: `data/eval/questions.csv` (data/는 gitignore, 커밋 안 함). 질문은 사용자가 20~30개 작성.
+  - 형식: UTF-8 CSV(엑셀은 "CSV UTF-8"로 저장), 머리행 `id,question,subject,pages,note`
+    - `subject`: 정답 과목(page_map key `subject1`~`subject3`)
+    - `pages`: 정답 인쇄 쪽번호, 여러 개는 `|`로 구분(예: `18|19`). **비워 두면 "자료에 없는 질문"**(확인 불가 임계값 평가용)
+    - `note`: 메모(선택)
+  - 예: `q01,DIKW 피라미드에서 지혜란?,subject1,18,`
+- 평가 스크립트(구현 예정): 질문마다 검색 → 상위 K개 청크 중 정답 과목 book의 정답 쪽 청크가 있으면 적중.
+  - hit@1 / hit@3 / hit@K(과목별·전체), 정답 청크 순위
+  - "확인 불가" 임계값 후보별(예: 1위 점수 0.40~0.60): 답할 수 있는 질문 중 통과 비율, 자료에 없는 질문 중 차단 비율
+  - 결과는 `data/reports/eval/`에 저장하고, 설정(임베딩 모델·리랭커·키워드 검색·N/K) + 요약 수치를 PROGRESS "자체 평가 메모"에 기록
+- 임베딩 모델·리랭커·키워드 검색을 바꿀 때마다 같은 세트로 다시 돌려 비교한다.
 
 ## 판정기 (교체 가능 모듈)
 - 인터페이스: `can_answer`(근거로 답 가능?), `classify`(단원·유형 선택), `choose`(객관식 후보), `verify`(답이 근거와 일치?)
@@ -174,7 +198,29 @@ adsp-study-rag/
 - 판정 기록은 기존 `judgments`(question_key 추가)에 남기고 wrong_note_id로 연결(컬럼 추가)
 - 팀 규격 테이블은 변경하지 않는다.
 
-## 화면 (React + Vite)
+## 이론 보충·수정 (설계, 2026-09-30 — 마이그레이션·세부 결정은 구현 세션에서)
+### 보충: 자료에 없는 내용 추가
+1. 트리거: 답변이 "자료에서 확인 불가"일 때 화면에서 **텍스트 입력** 또는 **사진 업로드**로 보충(관리 화면에서 직접 추가도 가능).
+2. 저장: 과목별 "사용자 보충" book(과목당 1개, 없으면 생성, `material_type=user_supplement`)에 page 1행 추가.
+   - 텍스트: 입력을 저장소에 `books/{book_id}/{page_id}.txt`(UTF-8)로 저장해 `source_s3_uri`(NOT NULL)를 채운다. extract_text 결과는 `.text.json`에 `engine="user_text"`로 **입력 그대로**(교정 없음).
+   - 사진: 기존 업로드 경로와 같다(인쇄체 PaddleOCR, 손필기는 비전 LLM).
+3. 처리: extract_text → chunk_theory → embed를 **요청 안에서 동기 처리**(보충은 보통 1쪽). detect_visuals는 건너뛰고 skipped 기록(D-019).
+   - 보충 page는 서로 독립이므로 앞 페이지 제목 경로를 이어받지 않게 하는 옵션이 필요(구현 시 결정). embedding_text 앞에 원래 질문이나 사용자가 붙인 제목을 넣는 방안 검토.
+4. 원래 질문을 다시 실행해 보충 청크가 근거로 잡히는지 보여준다.
+- DB: `books.material_type` CHECK(001에서 추가한 내 컬럼, 현재 textbook/lecture_note/personal_note)에 `user_supplement` 추가는 구현 세션에서 새 마이그레이션으로(사용자 확인 후).
+
+### 수정: 교재 청크의 오류 정정
+- `raw_text` 원문은 **덮어쓰지 않는다**(팀 규격 주석 "교재 원문 그대로. 일반지식으로 자동 교정 금지").
+- `mingyu_app.chunk_corrections`(초안): id, original_chunk_id(원본 청크), corrected_text(수정 텍스트), reason(사유), is_active(활성), corrected_chunk_id(새로 만든 청크), created_at, updated_at. 재청킹에 대비해 원본 page_id·raw_text 스냅샷·line_range도 남긴다.
+- 적용: 수정 텍스트로 **보충 book에 새 page·청크를 만들어 연결**(원본 페이지·쪽번호는 page_metadata에 기록)하고, 원본 청크는 `embedding_enabled=false` → v_searchable_theory에서 빠진다.
+- 되돌리기 = 원복: is_active=false, 수정 청크 embedding_enabled=false(또는 삭제), 원본 청크 embedding_enabled=true.
+- 주의: `run_stages` 재청킹은 페이지 청크를 지우고 다시 만들어 청크 id가 바뀐다 → 활성 수정이 있는 페이지는 재청킹 후 스냅샷으로 새 청크를 찾아 다시 연결하고 embedding_enabled=false를 재적용해야 한다(구현 시 방식 결정).
+
+### 출처 표시와 관리
+- 답변 근거마다 **출처 유형**을 표시한다: 교재 / 사용자 보충 / 수정본. solution_evidence 스냅샷에 출처 유형을 남기는 방식(mingyu_app 컬럼 추가 등)은 구현 시 결정.
+- **답변 피드백**(좋음/나쁨 + 메모)과 **보충·수정 목록(삭제·복구)**은 관리 화면 검수 탭에 포함한다.
+
+## 화면 (React + Vite, 개인 프론트 — D-021)
 - A. 자료 업로드: 과목 선택/생성, 자료 유형, 다중 업로드, 처리 상태
-- B. 공부: 과목, 질문 또는 문제 사진, 제약 프리셋, 답변 + 근거 청크 + 출처(시각자료 근거는 원본 crop 이미지 + 설명문). 오답 입력(내 답·내 이유) 모드, 오답노트 목록·재질문
-- C. 관리: 과목·자료 목록, 삭제/재임베딩, 사용 로그, 검수 탭(v_review_queue 기반, 위 "품질 검수 도구" 2단계)
+- B. 공부: 과목, 질문 또는 문제 사진, 제약 프리셋, 답변 + 근거 청크 + 출처(출처 유형: 교재/사용자 보충/수정본, 시각자료 근거는 원본 crop 이미지 + 설명문). "확인 불가"면 이론 보충 입력. 답변 피드백. 오답 입력(내 답·내 이유) 모드, 오답노트 목록·재질문
+- C. 관리: 과목·자료 목록, 삭제/재임베딩, 사용 로그, 검수 탭(v_review_queue 기반 + needs_review 청크, 위 "품질 검수 도구" 2단계, 답변 피드백, 보충·수정 목록 삭제·복구)

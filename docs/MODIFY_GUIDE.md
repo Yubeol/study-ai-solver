@@ -34,7 +34,8 @@
 | 제목으로 인정할 최대 길이 | `.env` | `CHUNK_HEADING_MAX_CHARS`(60). "1. …", "2) …"여도 이보다 길면 본문 | 위 dry-run → 리포트의 청크 `제목=` |
 | 검색에서 뺄 조각(R 출력·그림 글자) 기준 | `.env` | `CHUNK_REVIEW_MAX_CHARS`(80) 미만 **그리고** 본문 한글 비율 `CHUNK_REVIEW_MIN_HANGUL_RATIO`(0.3) 미만이면 needs_review=true | 위 dry-run 요약의 `needs_review` |
 | 머리말/쪽번호 제거, 제목 인식, 기출 표시(exam_clues), 기출 문제 블록(제외 영역) 규칙 | `backend/app/ingestion/chunking.py` | 맨 위 패턴(`_BOOK_HEADER`, `_SUBJECT_FOOTER`, `_SECTION`, `_ITEM`, `_EXAM_MARK`, `_EXAM_BLOCK_START`, `_EXAM_BLOCK_END` 등), `looks_like_exam`(다음 쪽으로 이어지는 문제 블록 판단). 규칙 설명은 DECISIONS D-019 | `uv run pytest backend/tests/test_chunking.py` → dry-run 리포트 확인 → `--apply --subject …`(기존 청크를 지우고 다시 넣음, 임베딩도 다시 해야 함) |
-| 임베딩 모델·차원·장치 | `.env` | `EMBEDDING_MODEL`(BAAI/bge-m3), `EMBEDDING_DIM`(1024, DB 컬럼이 vector(1024)라 바꾸면 안 됨), `EMBEDDING_DEVICE`(cpu) | `uv run pytest -m embedding_model` |
+| 임베딩 모델·차원 | `.env` | `EMBEDDING_MODEL`(BAAI/bge-m3), `EMBEDDING_DIM`(1024, DB 컬럼이 vector(1024)라 바꾸면 안 됨). 모델을 바꾸면 전체 재임베딩 필요 | `uv run pytest -m embedding_model` |
+| 임베딩 장치 | `.env` | `EMBEDDING_DEVICE` (기본 `cpu`, `.env`에 없으면 config 기본값 cpu). 지금 설치된 torch는 CPU 빌드라 GPU 값은 동작하지 않음 | `uv run pytest -m embedding_model` |
 | 임베딩 모델 저장 위치 | `.env` | `EMBEDDING_MODEL_DIR` (HF_HOME으로 전달, 현재 `E:\hf_models`, 비우면 C:) | 첫 실행 후 그 폴더 아래 `hub/models--BAAI--bge-m3` |
 | 임베딩 속도·메모리 | `.env` | `EMBEDDING_BATCH_SIZE`(8), `EMBEDDING_MAX_SEQ_LENGTH`(1024 토큰, 넘으면 잘림) | `run_stages --stages embed --pages 14,15` 실행 시간 |
 | 검색 개수(Top-K) | `.env` | `SEARCH_TOP_K`(5) | `cd backend; uv run python -m app.retrieval.search "질문"` |

@@ -8,7 +8,7 @@
 
 ## D-003 DB는 팀 공유 서버의 mingyu 스키마 (2026-09-29)
 - 팀원이 AWS에 PostgreSQL을 띄우고 스키마 4개(jaewon, mingyu, sugi, sumin)와 규격 테이블을 만들어 둠. 내 스키마는 mingyu.
-- 공용 프론트가 같은 구조로 조회할 수 있으므로 기존 컬럼은 바꾸지 않고 추가만 한다.
+- 공용 프론트가 같은 구조로 조회할 수 있으므로 기존 컬럼은 바꾸지 않고 추가만 한다. → **D-021에서 공용 프론트 없음으로 변경**, "추가만" 규칙은 유지.
 - 서비스 전용 테이블은 별도 스키마 mingyu_app에 둔다.
 - 보안: 5432 포트가 0.0.0.0/0으로 공개되어 있고 관리자 계정을 공유한다. 접속 정보는 .env에만 두고, 다른 스키마는 접근하지 않는다.
 
@@ -159,3 +159,9 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 상태: embed 후 EMBEDDED(D-019). 실행은 `run_stages --stages embed`(VERIFIED/EMBEDDED 페이지만), `--pages`로 쪽 제한.
 - 검색 확인: `python -m app.retrieval.search "질문"`, 대상은 팀 규격 뷰 `v_searchable_theory`(embedding_enabled, embedding 있음, needs_review=false). 새 DDL 없음. Top-K는 `SEARCH_TOP_K`(5).
 - 다운로드 크기(2026-09-30 확인): bge-m3 main에는 `pytorch_model.bin`(2.27GB)만 있고, transformers가 Hub PR(refs/pr/130)의 `model.safetensors`(2.27GB)를 추가로 받아 `E:\hf_models`가 약 4.3GB. C: 캐시는 늘지 않음(기존 `~/.cache/huggingface` 1.3GB는 09-29 이전 PaddleOCR·다른 프로젝트 것).
+
+## D-021 팀 방향 변경: 공용 프론트 없이 각자 개인 프로젝트 (2026-09-30)
+- 팀 공용 프론트는 만들지 않는다. 각자 백엔드와 프론트를 개인 프로젝트로 만든다(내 프론트는 `frontend/`, React + Vite).
+- 공유 DB 서버와 팀 규격 테이블(`mingyu` 스키마)은 그대로다 → **기존 컬럼 이름 변경·삭제·타입 변경 금지, 컬럼/인덱스 추가만** 규칙은 유지한다(D-003의 근거였던 "공용 프론트 조회"는 없어졌지만 팀 규격 호환을 위해).
+- `mingyu_app` 스키마와 API 설계는 자유(팀 규격과 맞출 필요 없음). DDL은 여전히 번호 붙은 마이그레이션 + 사용자 확인(CLAUDE.md).
+- ARCHITECTURE의 프론트 관련 문구를 개인 프론트 기준으로 정리.
