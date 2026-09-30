@@ -17,20 +17,21 @@
 - 문서: 설계 보완(오답노트·검수 도구·시각자료 표시 원칙·팀 교재 반입·crop 계획, D-014~D-017). 사용자용 문서 `docs/sessions/`(세션별 설명), `docs/MODIFY_GUIDE.md`(수정 위치 표) — 세션 시작 시 읽지 않음
 - 규칙 추가(CLAUDE.md): 조정 가능한 값은 `.env`/`config.py` 한 곳, LLM 프롬프트는 `backend/app/prompts/` 텍스트 파일. /wrap은 세션 설명 파일까지 작성
 
-## 다음 작업 (2026-09-30 재정리)
+## 다음 작업 (2026-09-30 팀 교재 반입 후 갱신)
 설계는 ARCHITECTURE의 "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-017 참고.
 1. **[다음 세션] 청킹 + 로컬 임베딩(BGE-M3) → 검색 동작 확인** (머리말/쪽번호 제외, 기출 표시 → exam_clues, raw_text 원문 그대로)
-   - 입력: 반입된 324페이지의 `page_metadata.text.uri`(team_text JSON의 `text`). OCR 페이지(`page_metadata.ocr`)와 둘 다 읽을 수 있게
-   - 반입 페이지는 extract_text를 이미 끝냈으므로 기존 파이프라인(`pipeline.process_page`)에서 extract_text를 뺀 단계 목록으로 돌린다(재처리 진입점 필요)
-   - 팀 텍스트에는 줄 bbox 없음 → 청크 source_bbox 비움, 페이지 단위 출처
-   - 쪽번호 줄은 `|`가 1로 읽힌 형태("127" = 27쪽)도 있음(D-018)
-3. 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽) (D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터)
-4. 그래프 포함 문제 10개로 추출 정확도 확인 (비전 LLM 텍스트화, D-015)
-5. crop 전체 확장 + 시각자료 설명문 생성 (Gemini, 재시도·폴백 D-010)
-6. 질의 흐름 + Jev 호출 테스트 — Jev 키는 받았으나 **어느 경로(TypeSafe 직접 / Cloudflare) 키인지 확인 필요**. 새 키 이름(JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS)을 config에 반영, 모델 이름은 공식 문서로 확인(추측 금지), D-007 갱신
-7. 오답노트 구현 (D-017, mingyu_app 마이그레이션은 사용자 확인 후)
-8. PaddleOCR(새 캡처용) 실제 교재 품질·속도 측정, 손필기(personal_note) 비전 LLM 추출
-9. 프론트 화면 3개 + 검수 탭
+   - 권장 순서: ① 팀 텍스트 몇 쪽(예: 1과목 14·58·59쪽, 3과목 217·226쪽)을 열어 머리말/쪽번호/기출 표시 패턴 정리 → 규칙을 사용자에게 보여주기 ② `stages.chunk_theory` 구현(theory_chunks INSERT, sort_order) ③ extract_text를 뺀 단계로 반입 페이지를 돌리는 실행 진입점(`python -m` 스크립트 또는 재처리 API) ④ BGE-M3 설치(공식 자료 확인·DECISIONS 기록) 후 `stages.embed` ⑤ 질문 몇 개로 벡터 검색 결과 확인
+   - 입력: `pages.page_metadata.text.uri` → 저장소 `books/{book_id}/{page_id}.text.json`의 `text`(team_text). OCR 업로드 페이지는 `page_metadata.ocr.uri`(`.ocr.json`의 lines) → 두 형식을 모두 읽는 함수 하나로
+   - 관련 파일: `backend/app/ingestion/stages.py`(chunk_theory, embed 자리), `pipeline.py`(DEFAULT_STAGES, process_page), `repositories/`(theory_chunks용 새 모듈), `core/config.py`(청크 크기·겹침·임베딩 배치 등 조정 값)
+   - DB: `theory_chunks.embedding_text` NOT NULL, `embedding vector(1024)`, `exam_clues`/`confusable_concepts`는 JSONB, `sort_order`·`processing_run_id`는 001에서 추가한 컬럼. 검색 뷰 `v_searchable_theory`는 needs_review=false + 임베딩 있는 것만
+   - 주의: raw_text는 팀 텍스트 원문 그대로(교정 금지). 팀 텍스트에는 줄 bbox 없음 → source_bbox 비움. 쪽번호 줄은 `|`가 1로 읽힌 형태("127" = 27쪽)도 있음(D-018). 58/59쪽은 줄 분할된 조각(`page_metadata.text.lines`). 청크 크기 등은 config에(CLAUDE.md). DDL이 필요하면 마이그레이션 파일로 사용자 확인 후
+2. 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽) (D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터)
+3. 그래프 포함 문제 10개로 추출 정확도 확인 (비전 LLM 텍스트화, D-015)
+4. crop 전체 확장 + 시각자료 설명문 생성 (Gemini, 재시도·폴백 D-010)
+5. 질의 흐름 + Jev 호출 테스트 — Jev 키는 받았으나 **어느 경로(TypeSafe 직접 / Cloudflare) 키인지 확인 필요**. 새 키 이름(JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS)을 config에 반영, 모델 이름은 공식 문서로 확인(추측 금지), D-007 갱신
+6. 오답노트 구현 (D-017, mingyu_app 마이그레이션은 사용자 확인 후)
+7. PaddleOCR(새 캡처용) 실제 교재 품질·속도 측정, 손필기(personal_note) 비전 LLM 추출
+8. 프론트 화면 3개 + 검수 탭
 - 틈틈이: 재처리 API(FAILED/REVIEW_REQUIRED/멈춘 페이지), 자료 삭제 시 저장 파일 정리, (사용자) S3 팀 버킷 유무 문의
 
 ## 막힌 것 / 확인 필요
