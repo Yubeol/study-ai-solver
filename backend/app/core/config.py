@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     eval_questions_path: Path = Field(default=Path("data/eval/questions.csv"))  # 상대경로면 저장소 루트 기준
     eval_rank_depth: int = Field(default=20, gt=0)  # 정답 순위를 찾을 깊이(K보다 작으면 K)
     eval_thresholds: str = "0.40,0.45,0.50,0.55,0.60"  # "확인 불가" 1위 점수 임계값 후보(쉼표 구분)
+    eval_report_thumb_width: int = Field(default=320, gt=0)  # HTML 보고서 페이지 썸네일 가로 픽셀
+    eval_report_text_chars: int = Field(default=200, gt=0)  # HTML 보고서에 보일 청크 텍스트 앞부분 글자 수
 
     # 판정기
     judge_provider: Literal["none", "jev_typesafe", "jev_cloudflare", "llm"] = "none"

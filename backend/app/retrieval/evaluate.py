@@ -10,7 +10,8 @@
 - 적중: 상위 K개 중 정답 과목 book의 정답 쪽 청크가 있으면 적중. 정답 순위는 EVAL_RANK_DEPTH까지 찾는다.
 - 임계값: 1위 점수(cosine 유사도) ≥ t 이면 "답변 시도"(통과), 미만이면 "확인 불가"(차단).
   답할 수 있는 질문은 통과 비율, 자료에 없는 질문은 차단 비율을 본다.
-- 결과: {REPORTS_DIR}/eval/{시각}.json(질문별 상위 결과 전체), .txt(요약). DB는 읽기만 한다.
+- 결과: {REPORTS_DIR}/eval/{시각}.json(질문별 상위 결과 전체), .txt(요약), .html(질문별 상위 K개 + 페이지 썸네일,
+  eval_report.py). DB는 읽기만 한다.
 """
 
 import argparse
@@ -286,6 +287,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     (out_dir / f"{stamp}.txt").write_text(text + "\n", encoding="utf-8")
     print(f"리포트: {out_dir / stamp}.json / .txt")
+    try:
+        from app.retrieval.eval_report import write_report
+
+        print(f"HTML 보고서: {write_report(settings, out_dir / f'{stamp}.json')}")
+    except Exception as e:  # noqa: BLE001 - 보고서 실패해도 평가 결과(json/txt)는 남긴다
+        print(f"HTML 보고서 생성 실패({type(e).__name__}: {e}) → 나중에 `python -m app.retrieval.eval_report`로 다시 만들 수 있음")
     return 0
 
 

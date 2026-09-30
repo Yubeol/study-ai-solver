@@ -1,6 +1,6 @@
 # PROGRESS
 
-## 현재 상태 (2026-09-30 전체 임베딩 확인·검색 평가 스크립트 세션 기준)
+## 현재 상태 (2026-09-30 검색 평가 실행 세션 기준)
 - 환경·문서: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
   - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`(C 여유 부족). 새 터미널부터 적용
 - 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev 키는 사용자가 .env에 넣음(TYPESAFE_API_KEY, JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS — 코드에서는 아직 안 씀, 값 미확인). S3 미확인 → STORAGE_BACKEND=local
@@ -12,11 +12,11 @@
   - **청킹 완료(D-019)**: `app/ingestion/chunking.py` + `stages.chunk_theory`. 팀 교재 324쪽 전부 VERIFIED(`pipeline.skipped=["detect_visuals"]`). theory_chunks 1과목 92 / 2과목 122 / 3과목 402(needs_review 11: R 출력·그림 조각), excluded_sections(exam_question, 원문 위치 포함) 24 / 21 / 42
   - **임베딩 완료(D-020)**: `app/ingestion/embedding.py`(BGE-M3, sentence-transformers 6.1.0, torch CPU, 정규화, 캐시 `E:\hf_models` 4.3GB) + `stages.embed`. **팀 교재 324쪽 전부 EMBEDDED**, v_searchable_theory 605행, 검색 대상인데 임베딩 없는 청크 0. 전체 실행 시간(processing_runs started_at~finished_at, 1과목에 모델 로딩 포함) 1과목 1분49초 / 2과목 2분35초 / 3과목 7분45초
   - 실행 진입점: `python -m app.ingestion.run_stages`(dry-run 기본, `--apply --subject`, `--stages chunk|embed|chunk,embed`, `--pages`). Ctrl+C 등으로 끊기면 run을 FAILED로 닫음(창 닫기·kill은 RUNNING으로 남을 수 있음). 검색 확인: `python -m app.retrieval.search "질문"`(v_searchable_theory)
-  - **검색 평가 스크립트(D-022)**: `python -m app.retrieval.evaluate`(`--questions`, `--k`, `--check`). hit@1/3/K·MRR(과목별·전체) + 임계값별 통과·차단 → `data/reports/eval/`. 예시 6문항(`data/eval/questions.sample.csv`)으로 동작 확인, **실제 질문 세트(`data/eval/questions.csv`)는 사용자 작성 대기**
+  - **검색 평가 스크립트(D-022)**: `python -m app.retrieval.evaluate`(`--questions`, `--k`, `--check`). hit@1/3/K·MRR(과목별·전체) + 임계값별 통과·차단 → `data/reports/eval/`. **실제 세트 33문항(`data/eval/questions.csv`)으로 평가 완료** — 결과는 아래 "자체 평가 메모". 실행하면 HTML 보고서(`app/retrieval/eval_report.py`, 질문별 정답 쪽·상위 K개 청크·페이지 썸네일, `data/reports/eval/{시각}.html` + `thumbs/`)도 자동 생성, 기존 json으로 다시 만들기 `python -m app.retrieval.eval_report [json]`
   - detect_visuals는 `StageNotImplemented` → 업로드 경로 기본 파이프라인은 여전히 **EXTRACTED에서 멈춤**
   - 모델 캐시: `OCR_MODEL_DIR=E:\paddle_models` (현재 19MB, 쓰는 모델 2개만)
   - 속도(맑은 고딕으로 만든 A4 30줄): 1장 약 16초, 평균 신뢰도 0.994. **실제 교재 스캔으로는 아직 미측정**
-- 테스트: `uv run pytest` 75개 통과(가짜 OCR·가짜 임베더, 청킹 규칙 10개, 실행 중단 1개, 평가 계산 6개 포함), `-m ocr_model` 1개, `-m embedding_model` 1개(실제 BGE-M3) 통과
+- 테스트: `uv run pytest` 77개 통과(가짜 OCR·가짜 임베더, 청킹 규칙 10개, 실행 중단 1개, 평가 계산 6개, 평가 보고서 2개 포함), `-m ocr_model` 1개, `-m embedding_model` 1개(실제 BGE-M3) 통과
 - 프론트엔드: 미생성
 - 문서: 설계 보완(오답노트·검수 도구·시각자료 표시 원칙·팀 교재 반입·crop 계획, D-014~D-017). 사용자용 문서 `docs/sessions/`(세션별 설명), `docs/MODIFY_GUIDE.md`(수정 위치 표) — 세션 시작 시 읽지 않음
 - 팀 방향(D-021): 공용 프론트 없이 각자 개인 프로젝트. 팀 규격 테이블 "기존 컬럼 변경 금지·추가만" 유지, mingyu_app·API는 자유
@@ -24,21 +24,18 @@
 
 ## 다음 작업 (2026-09-30 방향 조정: 텍스트 end-to-end 우선)
 설계는 ARCHITECTURE의 "질의 흐름"(검색 단계 상세, 검색 평가), "이론 보충·수정", "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-021 참고.
-1. **[다음 세션] 검색 평가 실행** (스크립트 `backend/app/retrieval/evaluate.py`, 기준은 D-022, 결과 `data/reports/eval/`)
-   - (사용자) `data/eval/questions.csv` 작성: 20~30개, 과목별 고르게, 자료에 없는 질문 몇 개 포함(ADsP와 가까운 주제도 넣기 — 예시에서 "트랜스포머 셀프 어텐션"이 0.524로 교재 질문 DIKW(0.515)보다 높았음). 형식 검사 `cd backend; uv run python -m app.retrieval.evaluate --check`
-   - 평가 실행 → 결과를 아래 "자체 평가 메모"에 기록, 틀린 질문은 리포트 json의 `top`으로 원인 확인(청킹 문제인지, 질문 표현 문제인지)
-   - 점수 하나로 확인 불가를 가르기 어려우면 2번의 답변 가능 판정(can_answer)·리랭커로 넘기는 것을 전제로 임계값은 느슨하게 잡는다
-   - 필요하면 청킹 규칙 보완(2과목 101쪽 첫 줄 기출 조각 등, D-019 알려진 한계)
-2. 질의 흐름 + 판정(Jev) + 리랭커 비교
+- (완료 2026-09-30) 검색 평가 실행 — 결과·틀린 질문 분류는 "자체 평가 메모". 확인 불가 임계값은 **확정하지 않음**(리랭커 점수로 다시 평가 후 결정). 정답 쪽 보완 후보(a06에 p45, c07에 p271)는 사용자 확인 후 반영
+1. **[다음 세션] 질의 흐름 + 판정(Jev) + 리랭커 비교**
    - 검색 → 답변 가능 판정 → 답변 생성(근거 인용) → 근거 일치 판정, `JUDGE_PROVIDER=none`에서도 끝까지 동작
    - Jev 키는 받았으나 **어느 경로(TypeSafe 직접 / Cloudflare) 키인지 확인 필요**. 새 키 이름(JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS)을 config에 반영, 모델 이름은 공식 문서로 확인(추측 금지), D-007 갱신
-   - 리랭커·키워드 검색·임베딩 대안 후보(ARCHITECTURE "검색 단계 상세")를 공식 자료로 확인 후 같은 평가 세트로 비교
+   - 리랭커·키워드 검색·임베딩 대안 후보(ARCHITECTURE "검색 단계 상세")를 공식 자료로 확인 후 같은 평가 세트(33문항)로 비교. 볼 것: hit@1(3과목 60%), 자료에 없는 질문과 답할 수 있는 질문의 1위 점수 분리(리랭커 점수로 임계값 재평가), 용어 중의성 질문(c01·c09)에 키워드 검색 효과
+   - 필요하면 청킹 보완: 표가 한 줄로 뭉친 청크(3과목 p268 평가지표 표 등), 2과목 101쪽 첫 줄 기출 조각(D-019)
+2. 간단한 프론트로 실사용 — 최소 화면, 질의 흐름 바로 뒤(공부 화면 B 중심 + 검수 탭 최소: 답변 피드백, 보충·수정 목록)
 3. 이론 보충·수정 (ARCHITECTURE "이론 보충·수정", material_type user_supplement·mingyu_app.chunk_corrections 마이그레이션은 사용자 확인 후)
-4. 간단한 프론트로 실사용 (공부 화면 B 중심 + 검수 탭 최소: 답변 피드백, 보충·수정 목록)
-5. 팀 텍스트 품질 비교: 몇 쪽(1과목 14쪽, 3과목 226쪽 등)을 팀 텍스트 / PaddleOCR mobile / Gemini 비전으로 뽑아 원본 이미지와 비교(정확도·누락·표/수식 처리, 속도·비용). 기존 "PaddleOCR 실제 교재 품질 측정"을 대체
-6. crop / 시각자료: 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽, D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터) → 그래프 포함 문제 10개로 추출 정확도 확인(D-015) → crop 전체 확장 + 설명문 생성(Gemini, 재시도·폴백 D-010)
-7. 오답노트 (D-017, mingyu_app 마이그레이션은 사용자 확인 후)
-8. 손필기(personal_note) 비전 LLM 추출
+4. 팀 텍스트 품질 비교: 몇 쪽(1과목 14쪽, 3과목 226쪽 등)을 팀 텍스트 / PaddleOCR mobile / Gemini 비전으로 뽑아 원본 이미지와 비교(정확도·누락·표/수식 처리, 속도·비용). 기존 "PaddleOCR 실제 교재 품질 측정"을 대체
+5. crop / 시각자료: 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽, D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터) → 그래프 포함 문제 10개로 추출 정확도 확인(D-015) → crop 전체 확장 + 설명문 생성(Gemini, 재시도·폴백 D-010)
+6. 오답노트 (D-017, mingyu_app 마이그레이션은 사용자 확인 후)
+7. 손필기(personal_note) 비전 LLM 추출
 - 틈틈이: 재처리 API(FAILED/REVIEW_REQUIRED/멈춘 페이지), 자료 삭제 시 저장 파일 정리, (사용자) S3 팀 버킷 유무 문의
 
 ## 막힌 것 / 확인 필요
@@ -67,7 +64,17 @@
 - 효율성:
 - 미비점:
 - 단점:
-- 검색 평가(hit@K, "확인 불가" 임계값): 2026-09-30 예시 6문항(답 가능 4, 자료 없음 2) 동작 확인용 — BGE-M3, 리랭커·키워드 없음, K=5: hit@1 3/4, hit@3·@5 4/4, 1위 점수 답 가능 0.515~0.794 / 자료 없음 0.338, 0.524(겹침). 표본이 작아 결론 아님, 실제 세트로 다시 기록. 형식: 날짜 / 설정(임베딩 모델, 리랭커, 키워드 검색, N/K) / 질문 수 / hit@1·3·K / 임계값별 통과·차단
+- 검색 평가(hit@K, "확인 불가" 임계값): 형식: 날짜 / 설정(임베딩 모델, 리랭커, 키워드 검색, N/K) / 질문 수 / hit@1·3·K / 임계값별 통과·차단
+  - 2026-09-30 예시 6문항: 동작 확인용(결론 아님). hit@1 3/4, hit@3·@5 4/4
+  - **2026-09-30 실제 세트 / BGE-M3, 리랭커·키워드 없음, K=5, 깊이 20 / 33문항(답 가능 26: 1과목 8·2과목 8·3과목 10, 자료 없음 7: 먼 주제 4 + 경계 사례 3) / 질문은 Claude 초안(교재를 보고 작성, 수험생 말투로 바꿈)이라 실제보다 유리할 수 있음**
+    - 전체 hit@1 21/26(81%), hit@3 25/26(96%), hit@5 26/26(100%), MRR 0.881. 과목별 hit@1: 1과목 7/8, 2과목 8/8, 3과목 6/10(MRR 0.742)
+    - 1위 점수: 답 가능 0.516~0.709(중앙 0.619) / 자료 없음 0.419~0.608(중앙 0.518). 경계 사례 n08(Mean Shift→k-평균·DBSCAN 청크) 0.608, n07(XGBoost 규제→릿지 p226) 0.537, n06(LSTM→신경망 종류 p287) 0.518. 먼 주제는 CNN 0.419, S3 0.468, 트랜스포머 0.508, Kafka 0.537
+    - 임계값(1위 점수 ≥ t 통과): 0.50 → 답 가능 26/26 통과, 자료 없음 2/7 차단 / 0.55 → 22/26 통과, 6/7 차단 / 0.60 → 17/26, 6/7. **점수 하나로는 못 가름**(두 분포가 0.52~0.61에서 겹침) → 확정 안 함, 리랭커 점수로 재평가
+    - 1위가 아닌 5문항 분류:
+      - 정답 쪽 정의(평가 세트) 문제 2: a06(2위, 1위 p45 "데이터의 오용" 통제 방안에 "피해자를 구제할 전문가"가 그대로 있음 — 이름 "알고리즈미스트"는 p52), c07(3위, 1위 p271 "민감도와 1-특이도의 관계"가 답이 되는 내용). 정답 쪽 추가 후보
+      - 질문 표현(용어 중의성) 3: c01(4위, "군집추출"이 계층적 군집 p320~322로 끌림), c02(3위, "5단계"·"매우 불만~매우 만족"이 디자인 씽킹 5단계·STRESS 적합도 표로 끌림), c09(2위, "lift"가 향상도 곡선 p274로 끌림). 키워드 검색·리랭커로 개선 여지
+      - 청킹 문제 1(부분): c07의 p268 평가지표 표가 한 줄로 뭉친 청크(계산식·설명이 섞임)라 상위 5에 못 듦
+    - HTML 보고서: `data/reports/eval/20260930-195048.html`
 
 ## 완료 기록
 - 2026-09-29: 저장소 초기 구조, uv 환경, GitHub 연결, 운영 문서 5종, Gemini 모델 확인
@@ -80,3 +87,4 @@
 - 2026-09-30: 청킹·임베딩 — chunk_theory(머리말/쪽번호 제외, 제목 경로 이어받기, exam_clues, 기출 문제 블록 제외, 짧은 비한글 조각 needs_review), run_stages 진입점, 팀 교재 324쪽 청킹(VERIFIED), BGE-M3 임베딩(sentence-transformers, E: 캐시) + 1과목 7쪽 시험 임베딩·검색 확인 (D-019, D-020, 테스트 68+2개)
 - 2026-09-30: 설계 보완(코드 변경 없음) — 팀 방향 변경(D-021, 공용 프론트 없음), 이론 보충·수정 설계, 검색 단계 리랭커·키워드 후보(미검증), 검색 평가 세트 형식, 다음 작업 순서 재조정(텍스트 end-to-end 우선). 전체 임베딩은 세션 종료 시점 실행 중
 - 2026-09-30: 전체 임베딩 완료 확인(324쪽 EMBEDDED, 검색 가능 605), 실행 중단 시 run FAILED로 닫기, 검색 평가 스크립트(hit@K·MRR·임계값별 통과/차단) + 예시 6문항 검증, /start에서 RUNNING run은 "실행 중일 수 있음"으로 보고 (테스트 75+2개)
+- 2026-09-30: 검색 평가 실행 — 질문 세트 33문항(Claude 초안, 경계 사례 3 포함), 평가 HTML 보고서(썸네일), 결과 기록(hit@5 100%, hit@1 81%, 확인 불가 임계값은 미확정), 다음 작업 순서 조정(질의 흐름 → 최소 화면 → 이론 보충·수정) (테스트 77+2개)

@@ -40,6 +40,7 @@
 | 임베딩 속도·메모리 | `.env` | `EMBEDDING_BATCH_SIZE`(8), `EMBEDDING_MAX_SEQ_LENGTH`(1024 토큰, 넘으면 잘림) | `run_stages --stages embed --pages 14,15` 실행 시간 |
 | 검색 개수(Top-K) | `.env` | `SEARCH_TOP_K`(5) | `cd backend; uv run python -m app.retrieval.search "질문"` |
 | 검색 평가 질문 세트·임계값 후보 | `.env` / `data/eval/questions.csv` | `EVAL_QUESTIONS_PATH`(질문 CSV, 형식은 ARCHITECTURE "검색 평가"), `EVAL_RANK_DEPTH`(20, 정답 순위 찾는 깊이), `EVAL_THRESHOLDS`(0.40,0.45,0.50,0.55,0.60) | `cd backend; uv run python -m app.retrieval.evaluate --check`(형식만) → `uv run python -m app.retrieval.evaluate` → `data/reports/eval/` |
+| 검색 평가 HTML 보고서 | `.env` | `EVAL_REPORT_THUMB_WIDTH`(320, 페이지 썸네일 가로 픽셀), `EVAL_REPORT_TEXT_CHARS`(200, 청크 텍스트 앞부분 글자 수). 평가 실행 시 자동 생성, 이미 있는 json으로 다시 만들기: `cd backend; uv run python -m app.retrieval.eval_report [json 경로]` | `data/reports/eval/{시각}.html` (썸네일은 `thumbs/`, 교재 이미지라 커밋 안 함) |
 | 청킹·임베딩 다시 돌리기 | 명령 | `cd backend; uv run python -m app.ingestion.run_stages --apply --subject all` (청킹, VERIFIED) / `--stages embed` (임베딩, EMBEDDED) / `--stages chunk,embed` / `--pages 14,15`로 쪽 제한 / 업로드 자료는 `--book-id`. Ctrl+C로 끊으면 그 run은 FAILED로 닫히고, 같은 명령을 다시 실행하면 됨 | DataGrip: `mingyu.theory_chunks`, `pages.page_metadata.chunking` |
 | DB 구조(컬럼·테이블 추가) | `backend/migrations/` | 새 번호 파일(`003_...sql`) 추가. 적용된 파일은 수정 금지, 팀 규격 컬럼은 추가만 | `cd backend; uv run python -m app.db.migrate --dry-run` → 사용자 확인 → `uv run python -m app.db.migrate` |
 
