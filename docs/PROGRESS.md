@@ -12,7 +12,7 @@
   - **청킹 완료(D-019)**: `app/ingestion/chunking.py` + `stages.chunk_theory`. 팀 교재 324쪽 전부 VERIFIED(`pipeline.skipped=["detect_visuals"]`). theory_chunks 1과목 92 / 2과목 122 / 3과목 402(needs_review 11: R 출력·그림 조각), excluded_sections(exam_question, 원문 위치 포함) 24 / 21 / 42
   - **임베딩 완료(D-020)**: `app/ingestion/embedding.py`(BGE-M3, sentence-transformers 6.1.0, torch CPU, 정규화, 캐시 `E:\hf_models` 4.3GB) + `stages.embed`. **팀 교재 324쪽 전부 EMBEDDED**, v_searchable_theory 605행, 검색 대상인데 임베딩 없는 청크 0. 전체 실행 시간(processing_runs started_at~finished_at, 1과목에 모델 로딩 포함) 1과목 1분49초 / 2과목 2분35초 / 3과목 7분45초
   - 실행 진입점: `python -m app.ingestion.run_stages`(dry-run 기본, `--apply --subject`, `--stages chunk|embed|chunk,embed`, `--pages`). Ctrl+C 등으로 끊기면 run을 FAILED로 닫음(창 닫기·kill은 RUNNING으로 남을 수 있음). 검색 확인: `python -m app.retrieval.search "질문"`(v_searchable_theory)
-  - **검색 평가 스크립트**: `python -m app.retrieval.evaluate`(`--questions`, `--k`, `--check`). hit@1/3/K·MRR(과목별·전체) + 임계값별 통과·차단 → `data/reports/eval/`. 예시 6문항(`data/eval/questions.sample.csv`)으로 동작 확인, **실제 질문 세트(`data/eval/questions.csv`)는 사용자 작성 대기**
+  - **검색 평가 스크립트(D-022)**: `python -m app.retrieval.evaluate`(`--questions`, `--k`, `--check`). hit@1/3/K·MRR(과목별·전체) + 임계값별 통과·차단 → `data/reports/eval/`. 예시 6문항(`data/eval/questions.sample.csv`)으로 동작 확인, **실제 질문 세트(`data/eval/questions.csv`)는 사용자 작성 대기**
   - detect_visuals는 `StageNotImplemented` → 업로드 경로 기본 파이프라인은 여전히 **EXTRACTED에서 멈춤**
   - 모델 캐시: `OCR_MODEL_DIR=E:\paddle_models` (현재 19MB, 쓰는 모델 2개만)
   - 속도(맑은 고딕으로 만든 A4 30줄): 1장 약 16초, 평균 신뢰도 0.994. **실제 교재 스캔으로는 아직 미측정**
@@ -24,7 +24,7 @@
 
 ## 다음 작업 (2026-09-30 방향 조정: 텍스트 end-to-end 우선)
 설계는 ARCHITECTURE의 "질의 흐름"(검색 단계 상세, 검색 평가), "이론 보충·수정", "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-021 참고.
-1. **[다음 세션] 검색 평가 실행**
+1. **[다음 세션] 검색 평가 실행** (스크립트 `backend/app/retrieval/evaluate.py`, 기준은 D-022, 결과 `data/reports/eval/`)
    - (사용자) `data/eval/questions.csv` 작성: 20~30개, 과목별 고르게, 자료에 없는 질문 몇 개 포함(ADsP와 가까운 주제도 넣기 — 예시에서 "트랜스포머 셀프 어텐션"이 0.524로 교재 질문 DIKW(0.515)보다 높았음). 형식 검사 `cd backend; uv run python -m app.retrieval.evaluate --check`
    - 평가 실행 → 결과를 아래 "자체 평가 메모"에 기록, 틀린 질문은 리포트 json의 `top`으로 원인 확인(청킹 문제인지, 질문 표현 문제인지)
    - 점수 하나로 확인 불가를 가르기 어려우면 2번의 답변 가능 판정(can_answer)·리랭커로 넘기는 것을 전제로 임계값은 느슨하게 잡는다
