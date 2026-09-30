@@ -1,6 +1,6 @@
 # PROGRESS
 
-## 현재 상태 (2026-09-30 검색 평가 실행 세션 기준)
+## 현재 상태 (2026-09-30 검색 평가 실행·정답 쪽 기준 세션 기준)
 - 환경·문서: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
   - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`(C 여유 부족). 새 터미널부터 적용
 - 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev 키는 사용자가 .env에 넣음(TYPESAFE_API_KEY, JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS — 코드에서는 아직 안 씀, 값 미확인). S3 미확인 → STORAGE_BACKEND=local
@@ -25,11 +25,15 @@
 ## 다음 작업 (2026-09-30 방향 조정: 텍스트 end-to-end 우선)
 설계는 ARCHITECTURE의 "질의 흐름"(검색 단계 상세, 검색 평가), "이론 보충·수정", "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-021 참고.
 - (완료 2026-09-30) 검색 평가 실행 — 결과·틀린 질문 분류는 "자체 평가 메모". 확인 불가 임계값은 **확정하지 않음**(리랭커 점수로 다시 평가 후 결정). 정답 쪽 기준 확정(D-023: 그 쪽만 보고 답할 수 있으면 정답) → a06·c07 검토 결과 변경 없음. "확인 불가" 2단계 판단 설계(ARCHITECTURE)
-1. **[다음 세션] 질의 흐름 + 판정(Jev) + 리랭커 비교**
-   - 검색 → 답변 가능 판정 → 답변 생성(근거 인용) → 근거 일치 판정, `JUDGE_PROVIDER=none`에서도 끝까지 동작
-   - Jev 키는 받았으나 **어느 경로(TypeSafe 직접 / Cloudflare) 키인지 확인 필요**. 새 키 이름(JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS)을 config에 반영, 모델 이름은 공식 문서로 확인(추측 금지), D-007 갱신
-   - 리랭커·키워드 검색·임베딩 대안 후보(ARCHITECTURE "검색 단계 상세")를 공식 자료로 확인 후 같은 평가 세트(33문항)로 비교. 볼 것: hit@1(3과목 60%), 자료에 없는 질문과 답할 수 있는 질문의 1위 점수 분리(리랭커 점수로 임계값 재평가), 용어 중의성 질문(c01·c09)에 키워드 검색 효과
-   - 필요하면 청킹 보완: 표가 한 줄로 뭉친 청크(3과목 p268 평가지표 표 등), 2과목 101쪽 첫 줄 기출 조각(D-019)
+1. **[다음 세션] 리랭커 + "확인 불가" 2단계 + 질의 흐름(판정 Jev 포함)** — 한 세션에 다 안 되면 1-a만 해도 됨
+   - 1-a 리랭커 비교(먼저):
+     - 후보 `BAAI/bge-reranker-v2-m3`, `dragonkue/bge-reranker-v2-m3-ko`(ARCHITECTURE "검색 단계 상세", 모두 미검증) → 모델 카드·라이선스·max_length·sentence-transformers CrossEncoder 지원 여부를 공식 자료로 확인해 DECISIONS에 날짜·URL 기록. 모델 캐시는 E:(`EMBEDDING_MODEL_DIR`과 같은 HF_HOME), 모델 이름은 `.env`(예: `RERANKER_MODEL`, 후보 수 `SEARCH_CANDIDATES_N`) — 새 값은 `.env.example`·MODIFY_GUIDE도 갱신
+     - 코드 위치: `backend/app/retrieval/search.py`(벡터 후보 N개) 뒤에 리랭크 단계, `backend/app/retrieval/evaluate.py`에 리랭커 켠 평가(config의 `"reranker"`에 모델명 기록, 리랭커 점수 기준 임계값 표 추가). 테스트는 가짜 리랭커로(실제 모델은 `-m` 마커)
+     - 같은 세트 `data/eval/questions.csv`(33문항, 정답 쪽 기준 D-023)로 비교 → PROGRESS "자체 평가 메모"에 한 줄 추가. 볼 것: hit@1(현재 81%, 3과목 60%), c01·c02·c09(용어 중의성)·a06·c07 순위, 자료 없음 7개(특히 boundary n06~n08)와 답 가능의 **리랭커 점수 분리**
+     - 그 결과로 "확인 불가" 2단계 값 결정(ARCHITECTURE의 "확인 불가" 2단계 판단 절): 1단계 임베딩 1위 점수 하한(낮게), 2단계 리랭커 임계값 → config/.env에 두고 DECISIONS 기록
+   - 1-b 질의 흐름: 검색 → (1단계 거름망) → 답변 가능 판정(리랭커 점수 / can_answer) → 답변 생성(근거 번호 인용, 프롬프트는 `backend/app/prompts/` 텍스트 파일) → 근거 일치 판정. `JUDGE_PROVIDER=none`에서도 끝까지 동작해야 함. 근거 부족이면 "자료에서 확인 불가"
+   - 1-c 판정기(Jev): 받은 키가 TypeSafe 직접 / Cloudflare 중 어느 경로인지 먼저 사용자 확인. `.env`의 JEV_ENABLED·JEV_MODEL·JEV_TIMEOUT_SECONDS를 config에 반영(값은 코드·로그에 출력 금지), 모델 이름은 공식 문서로 확인(추측 금지), D-007 갱신
+   - 주의: 키워드 검색(Kiwi / BGE-M3 sparse)은 리랭커로 c01·c09가 안 풀릴 때 검토. 표 뭉침 청크(p268)는 "막힌 것"에 기록만 했으니 이번에 손대지 않음
 2. 간단한 프론트로 실사용 — 최소 화면, 질의 흐름 바로 뒤(공부 화면 B 중심 + 검수 탭 최소: 답변 피드백, 보충·수정 목록)
 3. 이론 보충·수정 (ARCHITECTURE "이론 보충·수정", material_type user_supplement·mingyu_app.chunk_corrections 마이그레이션은 사용자 확인 후)
 4. 팀 텍스트 품질 비교: 몇 쪽(1과목 14쪽, 3과목 226쪽 등)을 팀 텍스트 / PaddleOCR mobile / Gemini 비전으로 뽑아 원본 이미지와 비교(정확도·누락·표/수식 처리, 속도·비용). 기존 "PaddleOCR 실제 교재 품질 측정"을 대체
@@ -88,4 +92,4 @@
 - 2026-09-30: 청킹·임베딩 — chunk_theory(머리말/쪽번호 제외, 제목 경로 이어받기, exam_clues, 기출 문제 블록 제외, 짧은 비한글 조각 needs_review), run_stages 진입점, 팀 교재 324쪽 청킹(VERIFIED), BGE-M3 임베딩(sentence-transformers, E: 캐시) + 1과목 7쪽 시험 임베딩·검색 확인 (D-019, D-020, 테스트 68+2개)
 - 2026-09-30: 설계 보완(코드 변경 없음) — 팀 방향 변경(D-021, 공용 프론트 없음), 이론 보충·수정 설계, 검색 단계 리랭커·키워드 후보(미검증), 검색 평가 세트 형식, 다음 작업 순서 재조정(텍스트 end-to-end 우선). 전체 임베딩은 세션 종료 시점 실행 중
 - 2026-09-30: 전체 임베딩 완료 확인(324쪽 EMBEDDED, 검색 가능 605), 실행 중단 시 run FAILED로 닫기, 검색 평가 스크립트(hit@K·MRR·임계값별 통과/차단) + 예시 6문항 검증, /start에서 RUNNING run은 "실행 중일 수 있음"으로 보고 (테스트 75+2개)
-- 2026-09-30: 검색 평가 실행 — 질문 세트 33문항(Claude 초안, 경계 사례 3 포함), 평가 HTML 보고서(썸네일), 결과 기록(hit@5 100%, hit@1 81%, 확인 불가 임계값은 미확정), 다음 작업 순서 조정(질의 흐름 → 최소 화면 → 이론 보충·수정) (테스트 77+2개)
+- 2026-09-30: 검색 평가 실행 — 질문 세트 33문항(Claude 초안, 경계 사례 3 포함), 평가 HTML 보고서(썸네일), 결과 기록(hit@5 100%, hit@1 81%, 확인 불가 임계값은 미확정), 다음 작업 순서 조정(질의 흐름 → 최소 화면 → 이론 보충·수정), 정답 쪽 기준(D-023)·"확인 불가" 2단계 판단 설계 (테스트 77+2개)
