@@ -1,0 +1,8 @@
+{
+  "type": "noul",
+  "instructions": "state의 evidence(교재에서 검색한 근거 목록)만으로 question에 답할 수 있는가? 일반 지식은 쓰지 않고 evidence에 적힌 내용만 본다. 객관식이면 evidence로 정답 보기 하나를 고를 수 있는지 본다.",
+  "criteria": {
+    "true": "evidence 안의 문장이 question이 묻는 내용(정의, 구분, 값, 정답 보기)을 직접 말하고 있어 그 문장만으로 답을 만들 수 있다",
+    "false": "evidence가 주제만 비슷하고 question이 묻는 내용은 말하지 않거나, 답하려면 evidence에 없는 지식이 필요하다"
+  }
+}

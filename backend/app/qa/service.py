@@ -2,7 +2,10 @@
 
 - 검색: 질문 임베딩 → 벡터 후보 N개 → 리랭커 → 상위 K개. 벡터 1위가 하한 미만이면 리랭크도 건너뛴다.
 - 3구간(search.is_answerable): reject면 LLM 호출 없이 "자료에서 확인 불가".
-  gray면 판정기 can_answer(JUDGE_PROVIDER=none이면 판정 생략 → 답변하되 "근거 확신 낮음").
+  gray면 판정기 can_answer(질문 + 근거 K개). 확률 < JUDGE_CAN_ANSWER_MIN이면 LLM 호출 없이 확인 불가,
+  그 이상이면 답변(JUDGE_CONFIDENT_MIN 미만이면 "근거 확신 낮음"). 판정기 오류나 JUDGE_PROVIDER=none이면
+  판정 생략 → 답변하되 "근거 확신 낮음"(D-028).
+- 객관식 일관성 검사(mcq_check): 보기별 판정과 고른 번호가 모순이면 답은 그대로 두고 "근거 확신 낮음".
 - LLM 입력은 근거마다 과목(책 제목)·인쇄 쪽·제목 경로·clean_text. 응답의 근거 표시는 raw_text(교재 원문 그대로).
 - LLM이 unanswerable=true로 답하면 "자료에서 확인 불가"(3구간 뒤 한 겹 더).
 - 인용 검증: cited와 본문의 [n] 중 넘긴 근거 번호(1..K) 밖인 것은 제거하고 metadata에 기록.
@@ -18,9 +21,10 @@ import psycopg
 
 from app.core.config import Settings
 from app.ingestion.embedding import LocalEmbedder, get_embedder, to_pgvector
-from app.judge import Judge, get_judge
+from app.judge import Judge, JudgeResult, get_judge
 from app.llm.gemini import GeminiClient, GeminiError
 from app.prompts import load_json, load_text, render
+from app.qa.mcq_check import check_mcq
 from app.repositories.query_logs import insert_query_log
 from app.retrieval.rerank import LocalReranker, get_reranker, rerank
 from app.retrieval.search import is_answerable, search_theory
@@ -171,14 +175,14 @@ def answer_question(conn: psycopg.Connection, settings: Settings, models: QaMode
     rows = rows[:k]
     evidence = build_evidence(rows)
 
-    # 2. "확인 불가" 3구간
+    # 2. "확인 불가" 3구간. 회색 구간이면 판정기 can_answer(질문 + 근거 K개, D-028)
     zone, reason = is_answerable(settings, vector_top, rerank_top)
     judge_info = None
     if zone == "gray" and models.judge is not None:
         t = time.perf_counter()
-        ok, conf = models.judge.can_answer(question, [e["clean_text"] for e in evidence])
+        jr = models.judge.can_answer(question, evidence)
         timings["judge_ms"] = _ms(t)
-        judge_info = {"provider": models.judge.name, "can_answer": ok, "confidence": conf}
+        judge_info = judge_record(settings, models.judge.name, jr, timings["judge_ms"], len(evidence))
 
     result = {
         "question": question,
@@ -190,9 +194,11 @@ def answer_question(conn: psycopg.Connection, settings: Settings, models: QaMode
         "explanation": "",
         "confusions": "",
         "low_confidence": False,
+        "low_confidence_reasons": [],
+        "mcq_check": None,
         "llm": None,
     }
-    if zone == "reject" or (judge_info and not judge_info["can_answer"]):
+    if zone == "reject" or (judge_info and judge_info["can_answer"] is False):
         result |= {"status": "unanswerable", "confidence": "unanswerable"}
     elif models.llm is None:
         result |= {"status": "error", "confidence": None, "answer": LLM_ERROR_TEXT, "error": "llm_not_configured"}
@@ -202,9 +208,10 @@ def answer_question(conn: psycopg.Connection, settings: Settings, models: QaMode
         result |= _generate(settings, models.llm, question, evidence)
         timings["llm_ms"] = _ms(t)
         if result["status"] == "answered":
-            # 판정기 없이 회색 구간이면 확신 낮음. 유효 인용이 하나도 없어도 확신 낮음.
-            low = (zone == "gray" and judge_info is None) or not result["cited"]
-            result |= {"low_confidence": low, "confidence": "low" if low else "high"}
+            result["mcq_check"] = check_mcq(question, result["answer"], result["explanation"])
+            reasons = low_confidence_reasons(zone, judge_info, result["cited"], result["mcq_check"])
+            low = bool(reasons)
+            result |= {"low_confidence": low, "low_confidence_reasons": reasons, "confidence": "low" if low else "high"}
 
     cited = set(result.get("cited") or [])
     for e in evidence:
@@ -215,6 +222,47 @@ def answer_question(conn: psycopg.Connection, settings: Settings, models: QaMode
     result["timings_ms"] = timings
     result["query_log_id"] = _log(conn, settings, result)
     return result
+
+
+def judge_record(settings: Settings, provider: str, jr: JudgeResult, latency_ms: int, n_evidence: int) -> dict:
+    """판정 결과 기록(query_logs.metadata.judge). 확률값은 재적재 후 임계값 재조정에 쓰므로 오류가 아니면 항상 남긴다.
+
+    can_answer: 확률 ≥ JUDGE_CAN_ANSWER_MIN이면 True, 미만이면 False, 오류면 None(none과 같은 동작).
+    confident: 확률 ≥ JUDGE_CONFIDENT_MIN이면 "근거 확신 낮음" 해제.
+    """
+    p = jr.probability
+    return {
+        "provider": provider,
+        "question_key": "can_answer",
+        "input": {"question": True, "evidence_n": n_evidence},
+        "model": jr.model,
+        "probability": p,
+        "can_answer": None if p is None else p >= settings.judge_can_answer_min,
+        "confident": p is not None and p >= settings.judge_confident_min,
+        "thresholds": {"can_answer_min": settings.judge_can_answer_min,
+                       "confident_min": settings.judge_confident_min},
+        "latency_ms": latency_ms,
+        "usage": jr.usage,
+        "attempts": jr.attempts,
+        "error": jr.error,
+    }
+
+
+def low_confidence_reasons(zone: str, judge_info: dict | None, cited: list[int], mcq: dict | None) -> list[str]:
+    """답변했지만 "근거 확신 낮음"을 붙이는 이유들(비면 확신 높음)."""
+    reasons = []
+    if zone == "gray":
+        if judge_info is None:
+            reasons.append("gray_no_judge")
+        elif judge_info["error"]:
+            reasons.append("gray_judge_error")
+        elif not judge_info["confident"]:
+            reasons.append("gray_judge_not_confident")
+    if not cited:
+        reasons.append("no_valid_citation")
+    if mcq is not None and not mcq["consistent"]:
+        reasons.append("mcq_inconsistent")
+    return reasons
 
 
 def _generate(settings: Settings, llm: GeminiClient, question: str, evidence: list[dict]) -> dict:
@@ -253,8 +301,10 @@ def _log(conn: psycopg.Connection, settings: Settings, r: dict) -> str | None:
         "scores": r["scores"],
         "confidence": r.get("confidence"),
         "low_confidence": r["low_confidence"],
+        "low_confidence_reasons": r["low_confidence_reasons"],
         "llm_unanswerable": r.get("llm_unanswerable"),
         "judge": r["judge"],
+        "mcq_check": r["mcq_check"],
         "judge_provider": settings.judge_provider,
         "timings_ms": r["timings_ms"],
         "evidence": [

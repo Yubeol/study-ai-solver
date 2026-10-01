@@ -25,7 +25,10 @@
 | 파이프라인 버전 표시 | `backend/app/ingestion/pipeline.py` | `PIPELINE_VERSION` (processing_runs.pipeline_version에 기록) | DataGrip: `mingyu.processing_runs.pipeline_version` |
 | DB 커넥션 풀 크기 | `backend/app/db/connection.py` | `create_pool`의 `min_size`, `max_size` (현재 1/5, 공유 서버이므로 크게 늘리지 않기) | 서버 재시작 → `GET /health/db` |
 | Gemini 모델 | `.env` | `GEMINI_MODEL_LITE`, `GEMINI_MODEL_STRONG`. 질의 답변은 `ANSWER_MODEL`(lite/strong, strong이 실패하면 lite로 폴백) | 서버 재시작 → `/qa` 응답의 `llm.model` |
-| 판정기 선택 | `.env` | `JUDGE_PROVIDER` (none / jev_typesafe / jev_cloudflare / llm) — **지금은 none만 동작**(다른 값이면 서버 시작 시 오류, 1-c에서 구현). none이면 회색 구간은 답변 + "근거 확신 낮음" | `GET /health/db`의 `judge_provider` / `/qa` 응답의 `judge` |
+| 판정기 선택 | `.env` | `JUDGE_PROVIDER` (none / jev_typesafe / jev_cloudflare / llm) — **none, jev_typesafe만 동작**(나머지는 서버 시작 시 오류). none이면 회색 구간은 답변 + "근거 확신 낮음". jev_typesafe는 `TYPESAFE_API_KEY` 필요 | `GET /health/db`의 `judge_provider` / `/qa` 응답의 `judge` |
+| 판정기(Jev) 임계값·호출 설정 | `.env` | `JUDGE_CAN_ANSWER_MIN`(0.5, 회색 구간에서 Jev 확률이 이보다 낮으면 LLM 호출 없이 확인 불가), `JUDGE_CONFIDENT_MIN`(0.8, 이 이상이면 "근거 확신 낮음" 해제). 앞 값 ≤ 뒤 값. 잠정값(재적재 후 조정, D-028). `JEV_MODEL`(jev-latest), `JEV_API_URL`, `JEV_TIMEOUT_SECONDS`(20), `JUDGE_MAX_RETRIES`(2, 429/529/5xx/시간 초과), `JUDGE_RETRY_BASE_SECONDS`(2) | `sample_run --ids c06,c09,n08` → 보고서의 "판정기" 줄 / DataGrip `mingyu.query_logs.metadata->'judge'`(probability·latency_ms) |
+| 판정기 질문 문장 | `backend/app/prompts/judge_can_answer.json` | noul 질문의 `instructions`, `criteria.true/false`. 보내는 state(질문 + 근거 K개)는 `app/judge/jev.py`의 `request_body` | `uv run pytest backend/tests/test_judge.py` → `sample_run` |
+| 객관식 일관성 검사(보기별 판정 표현·부정형 문제 표현) | `backend/app/qa/mcq_check.py` | `_NEGATIVE_STEM`(부정형 문제 표현), `_VERDICT`(적절하다/적절하지 않다/확인되지 않는다 동의어), `_OPTION_HEAD`(보기 줄 머리). 모순이면 답은 그대로 두고 "근거 확신 낮음"(D-028) | `uv run pytest backend/tests/test_mcq_check.py` / 저장된 결과로 재검사: `cd backend; uv run python -m app.qa.mcq_run check {시각}.json` → `{시각}.mcqcheck.md` |
 | 팀 교재 PDF 장 ↔ 인쇄 쪽 매핑, 과목 제목, 합본 텍스트 파일 처리 | `data/raw/adsp/page_map.json` (gitignore) | `segments`(PDF 장 범위 + offset), `skip_pdf`(중복 촬영 등 건너뛸 장), `text_files`(여러 쪽짜리 텍스트 파일 → 쪽 목록. `split_at_lines`로 나눌 줄 번호 지정, 없으면 첫 쪽에 붙음), `title`/`subject`/`source_name` | `cd backend; uv run python -m app.ingestion.team_import --dry-run` → 요약과 `data/reports/team_import/plan.json`. 실제 반입은 `--apply --subject subject1`(전체는 `all`), 결과는 `apply_{key}.json` |
 | 팀 교재 저장 이미지 해상도·화질 | `.env` | `TEAM_IMPORT_RENDER_DPI`(72 = 원본 해상도), `TEAM_IMPORT_JPEG_QUALITY` | dry-run 끝 줄에 적용 값 표시 / 반입 후 `pages.source_width/height` |
 | 팀 교재 쪽번호 대조 미리보기 | `.env` | `TEAM_IMPORT_PREVIEW_DPI` (저장용과 별개) | `uv run python -m app.ingestion.team_import --preview subject3:84,85` → `data/reports/team_import/preview_subject3.jpg` |
@@ -65,7 +68,6 @@
 | 벡터/키워드 검색 비중(하이브리드) | | | |
 | 제약 프리셋 | | | |
 | 문제 사진 추출 프롬프트(그래프 텍스트화 포함) | | | |
-| 판정기 신뢰도 임계값 | | | |
 | Gemini 분당 요청 수 제한(대량 처리용) | | | |
 | 오답노트 틀린 유형·비교 프롬프트 | | | |
 | 재질문 문제 생성 프롬프트 | | | |

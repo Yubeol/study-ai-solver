@@ -35,6 +35,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         qa_models = getattr(app.state, "qa_models", None)
         if qa_models is not None and qa_models.llm is not None:
             qa_models.llm.close()
+        if qa_models is not None and qa_models.judge is not None:
+            qa_models.judge.close()
         pool.close()
 
 

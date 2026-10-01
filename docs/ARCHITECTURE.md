@@ -16,10 +16,10 @@ adsp-study-rag/
 │   │   ├── storage/       # Storage 인터페이스, local(구현), s3(자리만), get_storage()
 │   │   ├── ingestion/     # images(업로드 검증·decode_bgr), ocr(PaddleOCR 엔진), pipeline(단계 실행·상태 갱신), stages(단계 함수), chunking(청킹 규칙), embedding(BGE-M3), team_import, run_stages
 │   │   ├── retrieval/     # search(벡터 검색·"확인 불가" 3구간), rerank(리랭커), evaluate(검색 평가), eval_report(평가 HTML 보고서)
-│   │   ├── qa/            # service(질의 흐름: 검색→3구간→답변→인용 검증→query_logs), sample_run(평가 질문 일부를 /qa로 실행), mcq_run(기출 객관식 파싱·/qa 실행·채점 요약)
+│   │   ├── qa/            # service(질의 흐름: 검색→3구간→판정기→답변→인용 검증·객관식 검사→query_logs), mcq_check(객관식 일관성 검사), sample_run(평가 질문 일부를 /qa로 실행), mcq_run(기출 객관식 파싱·/qa 실행·채점 요약·재검사)
 │   │   ├── llm/           # gemini(REST generateContent, JSON 구조화 출력, 재시도·폴백)
-│   │   ├── judge/         # 판정기 인터페이스(get_judge, 지금은 none만)
-│   │   └── prompts/       # LLM 프롬프트 텍스트(answer_system/answer_user/answer_evidence_item.txt, answer_schema.json)
+│   │   ├── judge/         # 판정기 인터페이스(get_judge, JudgeResult), jev(TypeSafe 직접 API, can_answer noul)
+│   │   └── prompts/       # LLM 프롬프트 텍스트(answer_system/answer_user/answer_evidence_item.txt, answer_schema.json), 판정기 질문(judge_can_answer.json)
 │   ├── migrations/   # 번호 붙은 SQL 파일 (DDL 변경 이력)
 │   └── tests/        # DB 테스트는 접속 불가 시 skip
 ├── frontend/         # React + Vite, 개인 프론트 (미생성, 공용 프론트 없음 D-021)
@@ -33,7 +33,7 @@ adsp-study-rag/
 - `POST /books` {title, subject, material_type, edition?, source_name?} / `GET /books?subject=` / `GET /books/{id}` (page_count, status_counts 포함)
 - `POST /books/{id}/pages` (multipart `files` 여러 장, PNG/JPEG/WEBP, 장당 `MAX_UPLOAD_MB`) → 202 {run_id, pages}. 전부 검증 후 저장, 한 장이라도 실패하면 아무것도 저장하지 않음
 - `GET /books/{id}/pages`, `GET /processing-runs/{run_id}` (run 요약 + 페이지별 상태·현재 단계·오류)
-- `POST /qa` {question, k?} → {status(answered/unanswerable/error), zone(reject/gray/answer), zone_reason, confidence(high/low/unanswerable), low_confidence, answer, explanation, confusions, citations[인용된 근거: n, chunk_id, book_title, page, path, raw_text, 점수], evidence[넘긴 근거 전체], scores, timings_ms, llm{model, usage, citation_check, failed_attempts}, query_log_id}. 모델 미로드면 503
+- `POST /qa` {question, k?} → {status(answered/unanswerable/error), zone(reject/gray/answer), zone_reason, confidence(high/low/unanswerable), low_confidence, low_confidence_reasons, judge(회색 구간 판정 기록), mcq_check(객관식이면 일관성 검사), answer, explanation, confusions, citations[인용된 근거: n, chunk_id, book_title, page, path, raw_text, 점수], evidence[넘긴 근거 전체], scores, timings_ms, llm{model, usage, citation_check, failed_attempts}, query_log_id}. 모델 미로드면 503
 - 응답에서 저장소 URI(source_s3_uri)는 뺀다.
 - 테스트: 루트에서 `uv run pytest`
 
@@ -174,19 +174,20 @@ adsp-study-rag/
 7. "자료에서 확인 불가"이면 이론 보충 입력으로 연결(아래 "이론 보충·수정")
 
 ### 질의 흐름 구현 (2026-10-01, `app/qa/service.py`, D-025)
-- 서버 시작 시 `load_qa_models`: 임베딩·리랭커 로드 + 워밍업 1회(지연 로딩 안 함, 약 1분, RSS 약 4.6GB), Gemini 클라이언트, 판정기(`JUDGE_PROVIDER=none` → 없음). `PRELOAD_MODELS=false`(테스트용)면 `/qa`는 503.
+- 서버 시작 시 `load_qa_models`: 임베딩·리랭커 로드 + 워밍업 1회(지연 로딩 안 함, 약 1분, RSS 약 4.6GB), Gemini 클라이언트, 판정기(`JUDGE_PROVIDER=none` → 없음, `jev_typesafe` → JevJudge). `PRELOAD_MODELS=false`(테스트용)면 `/qa`는 503.
 - 순서: 질문 임베딩 → 벡터 후보 N(10) → (벡터 1위 ≥ 하한이면) 리랭크 → 상위 K(5) → 3구간
   - reject: LLM 호출 없이 "자료에서 확인 불가"
-  - gray: 판정기 can_answer(1-c). 판정기가 없으면 답변 + `low_confidence=true`("근거 확신 낮음")
+  - gray: 판정기 can_answer(질문 + 근거 K개, D-028). 확률 < `JUDGE_CAN_ANSWER_MIN`(0.5)이면 LLM 호출 없이 확인 불가, 그 이상이면 답변하고 ≥ `JUDGE_CONFIDENT_MIN`(0.8)이면 확신 낮음 해제. 판정기가 없거나 오류면 답변 + `low_confidence=true`("근거 확신 낮음")
   - answer: 답변
 - 답변 생성: Gemini `generateContent` + `responseJsonSchema`(`prompts/answer_schema.json`: unanswerable, answer, explanation, confusions, cited). 모델은 `ANSWER_MODEL`(lite 기본, strong이면 lite 폴백), 429/5xx/시간 초과/잘못된 JSON은 재시도(D-010).
   - LLM 입력: 근거마다 `[n] 과목(책 제목) / 교재 쪽 / 제목 경로` + clean_text. 응답의 근거 표시는 raw_text(교재 원문).
   - 시험형 형식: answer(핵심 1~2문장) → explanation(근거 기반 설명, [n] 인용) → confusions(근거 안의 헷갈리는 개념, 없으면 빈 값)
   - LLM이 unanswerable=true면 "자료에서 확인 불가"(3구간 뒤 한 겹 더). 유효 인용이 하나도 없으면 low_confidence.
   - 인용 검증: cited·본문 [n] 중 1..K 밖 번호는 제거하고 `citation_check`(invalid_cited, invalid_inline, inline_not_in_cited)에 기록. `[1, 2]` 형식도 인식. explanation·confusions의 인용 없는 문장 수도 기록(uncited_sentences, uncited_sentence_count — 기록만, 답을 고치지는 않음).
-- 기록: 팀 규격 `query_logs` 1행(question_text, retrieved_theory_ids=넘긴 근거 청크 id, answer=답+설명+구분, latency_ms, token_usage=Gemini usageMetadata, metadata={zone, zone_reason, status, scores, confidence, timings_ms(embed/vector/rerank/judge/llm/total), evidence(n·chunk_id·쪽·점수·cited), cited, citation_check, model, failed_attempts, …}). **컬럼 추가 없음**(metadata JSONB 사용). mingyu_app.solutions/solution_evidence 상세 저장은 아직 안 함.
+- 기록: 팀 규격 `query_logs` 1행(question_text, retrieved_theory_ids=넘긴 근거 청크 id, answer=답+설명+구분, latency_ms, token_usage=Gemini usageMetadata, metadata={zone, zone_reason, status, scores, confidence, low_confidence_reasons, judge(probability·can_answer·confident·thresholds·latency_ms·usage·attempts·error), mcq_check, timings_ms(embed/vector/rerank/judge/llm/total), evidence(n·chunk_id·쪽·점수·cited), cited, citation_check, model, failed_attempts, …}). **컬럼 추가 없음**(metadata JSONB 사용). mingyu_app.solutions/solution_evidence 상세 저장은 아직 안 함.
 - 샘플 실행: `python -m app.qa.sample_run --ids c06,c09,...`(서버 실행 중, 한 번에 최대 12문항) → `data/reports/answers/{시각}.json/.md`
 - 답변 온도 `ANSWER_TEMPERATURE`=0(비교 실험용 고정, D-025 추가).
+- 객관식 일관성 검사(D-028, `app/qa/mcq_check.py`): 답변이 나오면 보기 줄별 판정(적절하다/적절하지 않다/확인되지 않는다)과 고른 번호를 대조한다. 부정형은 '적절하지 않다' 1개 = 고른 번호, 긍정형은 '적절하다' 1개 = 고른 번호, 고른 줄이 '확인되지 않는다'면 모순. 모순이면 답은 그대로 두고 확신 낮음 + `metadata.mcq_check`. 저장된 결과 재검사는 `mcq_run check`.
 - 객관식(2026-10-01, D-027): 별도 분기 없이 프롬프트 규칙 8로 처리한다. 보기별로 근거와 대조하고, 부정형은 1순위로 근거와 어긋나는 보기, 2순위로 근거에 없는 보기가 하나뿐일 때 그 보기를 고른다. answer는 "정답은 ③이다 [n]." 한 문장, explanation은 보기마다 한 줄이다. 인용 검사에서 "③은 근거에서 확인되지 않는다." 줄은 `unsupported_option_sentences`로 따로 센다.
 - 기출 확인 `python -m app.qa.mcq_run`: run(자동 채점: 답의 번호 ↔ 정답, 거절·번호 못 뽑음은 "검토 필요") → report(수동 채점 `{시각}.grades.json`이 자동보다 우선, 과목별 요약·비교용 표·답변 전문) → compare(여러 실행 + 기준선, 실행 간 바뀜·기준선 대비) → `data/reports/mcq/`
 
@@ -233,7 +234,8 @@ adsp-study-rag/
 ## 판정기 (교체 가능 모듈)
 - 인터페이스: `can_answer`(근거로 답 가능?), `classify`(단원·유형 선택), `choose`(객관식 후보), `verify`(답이 근거와 일치?)
   - 오답노트용 추가(설계): `reason_match`(내 이유가 근거와 일치?, 예/아니오 + 신뢰도), `error_type`(틀린 유형 선택: concept_confusion / misread / calculation / memorization)
-- 구현체: `jev_typesafe`, `jev_cloudflare`, `llm`(Gemini 구조화 출력), `none`(판정 생략)
+- 구현체: `jev_typesafe`(구현 2026-10-01, can_answer만 — `app/judge/jev.py`, D-028), `jev_cloudflare`, `llm`(Gemini 구조화 출력), `none`(판정 생략)
+- 판정 기록은 지금 `query_logs.metadata.judge`에만 남긴다. `mingyu_app.judgments`는 query_logs 연결 컬럼이 없어 solutions 저장(화면 단계)부터 solution_id로 연결해 쓴다(D-028).
 - `JUDGE_PROVIDER`로 선택. 신뢰도 임계값은 제공자별로 따로 둔다.
 - `none`일 때 오답노트는 LLM 설명만 저장하고 틀린 유형은 LLM 구조화 출력 값(또는 비워 둠)을 쓴다. 판정 없이도 흐름은 끝까지 간다.
 - `mingyu_app.judgments.question_key` CHECK는 현재 4개 값 → 오답노트 구현 시 새 마이그레이션으로 `reason_match`, `error_type` 추가(내 스키마이므로 제약 교체 가능)

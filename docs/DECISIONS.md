@@ -258,3 +258,20 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 남은 거절: p26-3(근거 p27 데이터 마트 문장과 ④가 어긋나는데도 거절, 기준선에서는 흔들려 맞음/거절), p50-2(사례 연결형, 근거가 약함)
   - 알려진 한계: p84-1은 ①·② 둘 다 "근거에 없다"고 쓰고도 ①을 골랐다(정답과 같지만 규칙 위반, 수동으로 "답이 모호함"). 프롬프트 규칙만으로는 2순위 조건을 완전히 지키지 못한다 → 판정기(Jev) choice나 코드 검사(근거 없는 보기 줄 수 ≥ 2이면 거절) 후보
 - 일반 질문 영향: 10문항 샘플의 판정(답변 7 / 확인 불가 3)과 인용 쪽은 이전과 같았다(`data/reports/answers/20261001-182909`).
+
+## D-028 판정기 Jev(can_answer)는 회색 구간에서 질문 + 근거 K개로 부르고, 객관식 모순은 코드로 검사한다 (2026-10-01)
+- 대상: "확인 불가" 3구간의 회색 구간(리랭커 1위 0.03~0.15, D-024)에서만 부른다. 구간 경계는 지금처럼 config(`ANSWERABLE_*`)에서만 읽는다.
+- 보내는 것: **질문 + 근거 K개(5개)**. Gemini에 넘기는 근거와 같은 묶음이다. 질문만으로는 "근거로 답할 수 있는가"를 판단할 수 없기 때문이다.
+  - `state = {"question", "evidence": [{n, page, path, text=clean_text}]}`, `questions.can_answer` = noul 질문(`prompts/judge_can_answer.json`의 instructions + criteria.true/false), `model = JEV_MODEL`
+  - 공식 문서 재확인(2026-10-01): noul 응답 값은 "예일 확률(0=아니오, 1=예)", 오류 401/422/429/529, 429·529는 지수 백오프 재시도 권장. 출처: https://docs.typesafe.ai/api.md , https://docs.typesafe.ai/primitives/noul.md
+- 분기(잠정값, 재적재 후 조정): 확률 < `JUDGE_CAN_ANSWER_MIN`(0.5) → "자료에서 확인 불가"(Gemini를 부르지 않음) / 그 이상 → 답변, 그중 ≥ `JUDGE_CONFIDENT_MIN`(0.8)이면 "근거 확신 낮음" 해제. 판정기 오류(시간 초과, 재시도 소진, 401 등)는 none과 같은 동작(답변 + 확신 낮음)을 하고 이유를 기록한다.
+- 재시도: 429/529/5xx/시간 초과만 `JUDGE_MAX_RETRIES`(2)번, 대기 `JUDGE_RETRY_BASE_SECONDS`×2^(n-1). `.env`의 `JEV_ENABLED`는 `JUDGE_PROVIDER`와 역할이 겹쳐 쓰지 않는다.
+- 기록: `query_logs.metadata.judge` = {provider, question_key, input(question, evidence_n), model, probability, can_answer, confident, thresholds, latency_ms, usage, attempts, error}. 확률값은 재적재 후 임계값 재조정 자료라 오류가 아니면 항상 남긴다. 판정기 시간은 `timings_ms.judge_ms`(total에 포함)와 `judge.latency_ms`. 확신 낮음 이유는 `low_confidence_reasons`(gray_no_judge / gray_judge_error / gray_judge_not_confident / no_valid_citation / mcq_inconsistent).
+- **judgments 테이블은 이번에는 쓰지 않는다(사용자 결정).** 제약 조회(2026-10-01, 읽기 전용) 결과 `solution_id`·`problem_id`는 NULL 허용이고 둘 중 하나를 강제하는 CHECK·트리거가 없어 행은 들어간다. 하지만 query_logs를 가리키는 컬럼이 없어 어느 질문의 판정인지 연결할 수 없다 → DDL을 바꾸지 않고 query_logs.metadata에만 기록하고, 화면 단계에서 solutions를 저장할 때 solution_id로 연결해 쓰기 시작한다.
+- 실제 호출(2026-10-01, c06·c09·n08, 예상과 일치): c06 확률 0.92(247ms) → 답변, 확신 높음, 정답 쪽 247 인용 / c09 0.94(196ms) → 답변, 확신 높음, 정답 쪽 339 인용 / n08(자료 없음) 0.06(236ms) → 확인 불가(Gemini 미호출). 입력 1,846~2,505토큰·출력 21토큰, 응답 모델 jev-1.13.0. 판정기 시간은 /qa 전체(6.0~7.2초)의 약 3~4%. 결과 `data/reports/answers/20261001-190235`.
+- **객관식 일관성 검사**(`app/qa/mcq_check.py`, D-027 한계 p84-1 보완, Jev가 아니라 코드로):
+  - 보기 줄("①은 …")마다 판정을 뽑는다: 판정 표현이 있는 첫 문장의 마지막 표현. 적절하다(옳다·올바르다·맞다·해당한다) / 적절하지 않다(옳지 않다·올바르지 않다·부적절하다·틀리다·어긋난다·해당하지 않는다) / 확인되지 않는다(확인할 수 없다). "첫 문장"으로 좁힌 이유: 2회차 실행 p84-1처럼 ① 줄 뒤에 "[1]은 … ③은 적절하다"가 이어 붙으면 뒤 문장 판정을 가져왔다.
+  - 부정형(문제 본문에 적절하지 않은/옳지 않은/올바르지 않은/부적절한/틀린/아닌 것/해당하지 않는): '적절하지 않다'가 정확히 하나이고 고른 번호와 같아야 한다. 긍정형: '적절하다'가 정확히 하나이고 고른 번호와 같아야 한다. 고른 번호의 줄이 '확인되지 않는다'이면 모순.
+  - 모순이면 답을 거절로 바꾸지 않고 "근거 확신 낮음" + `metadata.mcq_check`(negative, chosen, option_verdicts, consistent, reasons).
+  - 저장된 결과 재검사(`mcq_run check`, Gemini 호출 없음): 20261001-183237·183551 두 실행 모두 **p84-1만 걸림**(정답 번호와 같지만 수동 채점 "답이 모호함"인 문제). 나머지 답변 12개는 통과, 거절 2개는 검사 대상 아님.
+  - 범위 밖: 판정 이유와 결론이 맞지 않는 줄(예: p99-1 ④ "근거에 없으므로 적절하다")은 보지 않는다(규칙 추가 안 함).

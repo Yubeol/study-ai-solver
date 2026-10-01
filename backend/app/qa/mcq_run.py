@@ -466,6 +466,8 @@ def main(argv: list[str] | None = None) -> int:
     p_cmp = sub.add_parser("compare", help="여러 실행 결과를 한 표로 비교 → mcq/compare-{시각}.md")
     p_cmp.add_argument("runs", nargs="+", help="run 결과 json들(같은 이름의 .grades.json이 있으면 수동 채점으로 씀)")
     p_cmp.add_argument("--baseline", default=None, help="기준선 run 결과 json(수정 전)")
+    p_chk = sub.add_parser("check", help="저장된 run 결과에 객관식 일관성 검사만 다시 돌림(Gemini 호출 없음) → {시각}.mcqcheck.md")
+    p_chk.add_argument("result", help="run 결과 json(같은 이름의 .grades.json이 있으면 수동 채점도 표시)")
     args = ap.parse_args(argv)
 
     settings = get_settings()
@@ -512,6 +514,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "compare":
         return _compare(out_dir, args.runs, args.baseline)
 
+    if args.cmd == "check":
+        name, results, grades = _load_run(out_dir, args.result)
+        text = mcq_check_markdown(name, results, grades)
+        path = _find(out_dir, args.result)
+        out = path.with_name(path.stem + ".mcqcheck.md")
+        out.write_text(text, encoding="utf-8")
+        print(text)
+        print(f"→ {out}")
+        return 0
+
     path = _find(out_dir, args.result)
     results = json.loads(path.read_text(encoding="utf-8"))
     manual = _load_grades(_find(out_dir, args.grades)) if args.grades else {}
@@ -530,6 +542,36 @@ def main(argv: list[str] | None = None) -> int:
     print(f"전체 {t['total']}: 맞음 {t['맞음']}, 틀림 {t['틀림']}, 확인 불가 {t['확인 불가']}, 모호 {t['답이 모호함']}, "
           f"검토 필요 {t[REVIEW]} → {path.with_suffix('.md')}")
     return 0
+
+
+def mcq_check_markdown(name: str, results: list[dict], grades: dict) -> str:
+    """저장된 답변에 객관식 일관성 검사(app.qa.mcq_check)를 돌린 표. 정답인데 걸린 문제는 따로 표시."""
+    from app.qa.mcq_check import check_mcq
+
+    rows, flagged_correct = [], []
+    for rec in results:
+        key, r = rec["item"]["key"], rec.get("response") or {}
+        g = grades.get(key, {})
+        if r.get("status") != "answered":
+            rows.append(f"| {key} | {g.get('verdict', '-')} | 검사 안 함({r.get('status')}) | | |")
+            continue
+        c = check_mcq(rec["question_text"], r.get("answer") or "", r.get("explanation") or "")
+        if c is None:
+            rows.append(f"| {key} | {g.get('verdict', '-')} | 객관식 아님/번호 못 뽑음 | | |")
+            continue
+        correct = c["chosen"] == rec["item"]["answer"]
+        if not c["consistent"] and correct:
+            flagged_correct.append(key)
+        verdicts = " ".join(f"{CIRCLED[int(n) - 1]}{v}" for n, v in c["option_verdicts"].items())
+        rows.append(f"| {key} | {g.get('verdict', '-')}(고름 {CIRCLED[c['chosen'] - 1]}, 정답 "
+                    f"{CIRCLED[rec['item']['answer'] - 1]}) | {'부정형' if c['negative'] else '긍정형'} | "
+                    f"{'통과' if c['consistent'] else '**걸림**: ' + '; '.join(c['reasons'])} | {verdicts} |")
+    return "\n".join([
+        f"# 객관식 일관성 검사 — {name}", "",
+        "| 문제 | 채점 | 유형 | 검사 | 보기별 판정 |", "|---|---|---|---|---|", *rows, "",
+        f"- 정답(고른 번호 = 정답 번호)인데 걸린 문제: {', '.join(flagged_correct) or '없음'}",
+        "- 판정 이유와 결론이 맞지 않는 줄(예: \"근거에 없으므로 적절하다\")은 이 검사 범위 밖이다.", "",
+    ])
 
 
 def _find(out_dir: Path, name: str) -> Path:

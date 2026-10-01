@@ -38,6 +38,13 @@ def to_markdown(items: list[dict]) -> str:
         s, t = r["scores"], r["timings_ms"]
         lines.append(f"- 판정: zone=`{r['zone']}`({r['zone_reason']}) / status=`{r['status']}` / "
                      f"confidence={r.get('confidence')} / 확신 낮음={r['low_confidence']}")
+        if r.get("low_confidence_reasons"):
+            lines.append(f"- 확신 낮음 이유: {', '.join(r['low_confidence_reasons'])}")
+        if j := r.get("judge"):
+            lines.append(f"- 판정기: {j['provider']}({j.get('model')}) 확률 {j['probability']} → can_answer={j['can_answer']}, "
+                         f"confident={j['confident']}, {j['latency_ms']}ms, 오류 {j.get('error')}")
+        if (m := r.get("mcq_check")) and not m["consistent"]:
+            lines.append(f"- 객관식 모순: {'; '.join(m['reasons'])}")
         lines.append(f"- 점수: 벡터 1위 {s['vector_top']} / 리랭커 1위 {s['rerank_top']}")
         lines.append("- 시간(ms): " + ", ".join(f"{k}={v}" for k, v in t.items()))
         llm = r.get("llm") or {}
@@ -90,8 +97,10 @@ def main(argv: list[str] | None = None) -> int:
                 resp.raise_for_status()
                 item["response"] = resp.json()
                 r = item["response"]
+                j = r.get("judge") or {}
+                judge = f" 판정기 p={j.get('probability')} {r['timings_ms'].get('judge_ms')}ms" if j else ""
                 print(f"{q.id}: {r['zone']}/{r['status']} 인용 {[c['n'] for c in r['citations']]} "
-                      f"{r['timings_ms']['total_ms']}ms")
+                      f"{r['timings_ms']['total_ms']}ms{judge}")
             except httpx.HTTPError as e:
                 item |= {"response": None, "error": f"{type(e).__name__}: {e}"}
                 print(f"{q.id}: 실패 {item['error']}")

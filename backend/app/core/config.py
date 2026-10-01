@@ -90,6 +90,16 @@ class Settings(BaseSettings):
     # 판정기
     judge_provider: Literal["none", "jev_typesafe", "jev_cloudflare", "llm"] = "none"
     typesafe_api_key: SecretStr = SecretStr("")
+    # Jev(TypeSafe 직접 API, D-007). 회색 구간에서만 can_answer(noul, 예일 확률 0~1)를 부른다(D-028).
+    jev_api_url: str = "https://api.typesafe.ai/v1/systemone"
+    jev_model: str = "jev-latest"
+    jev_timeout_seconds: float = Field(default=20, gt=0)  # 요청 1번의 제한 시간
+    judge_max_retries: int = Field(default=2, ge=0)  # 429/529/5xx/시간 초과 시 다시 시도할 횟수
+    judge_retry_base_seconds: float = Field(default=2, ge=0)  # 재시도 대기 = 이 값 × 2^(시도-1)
+    # 회색 구간 판정 (잠정값, 재적재 후 다시 조정): 확률 < CAN_ANSWER_MIN → 확인 불가(LLM 호출 없음) /
+    # CAN_ANSWER_MIN 이상 → 답변, 그중 CONFIDENT_MIN 이상이면 "근거 확신 낮음" 해제
+    judge_can_answer_min: float = Field(default=0.5, ge=0, le=1)
+    judge_confident_min: float = Field(default=0.8, ge=0, le=1)
     cloudflare_account_id: str = ""
     cloudflare_api_token: SecretStr = SecretStr("")
 
@@ -151,6 +161,8 @@ class Settings(BaseSettings):
     def _check_rerank_zones(self):
         if self.answerable_min_rerank_score > self.answerable_confident_rerank_score:
             raise ValueError("ANSWERABLE_MIN_RERANK_SCORE는 ANSWERABLE_CONFIDENT_RERANK_SCORE 이하여야 합니다.")
+        if self.judge_can_answer_min > self.judge_confident_min:
+            raise ValueError("JUDGE_CAN_ANSWER_MIN은 JUDGE_CONFIDENT_MIN 이하여야 합니다.")
         return self
 
     @property
