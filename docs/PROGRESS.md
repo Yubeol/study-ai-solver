@@ -35,7 +35,12 @@
 - (완료 2026-10-01) 팀 비교 준비 — 답변 온도 0 고정, 객관식 보기별 판단 규칙(D-027), 기출 자동 채점·실행 비교 리포트(`mcq_run compare`), DB 소스 확인. 결과는 "자체 평가 메모"
 - (완료 2026-10-01) 판정기(Jev) — 회색 구간 can_answer(질문 + 근거 K개), 객관식 일관성 검사(코드), judgments는 metadata에만(D-028). 결과는 "자체 평가 메모"
   - 남은 것: `.env`의 `JUDGE_PROVIDER`를 jev_typesafe로 켤지(사용자 결정). 0.5/0.8은 잠정값 → 재적재 후 `metadata.judge.probability`로 다시 잡는다. p26-3 거절(어긋나는 근거가 있는데 거절)은 그대로. 근거 일치 판정(verify)은 아직
-1. **[다음 세션 첫 작업] 간단한 프론트로 실사용** — 최소 화면. 공부 화면 B 중심 + 검수 탭 최소(답변 피드백, 보충·수정 목록). 확신 낮음 이유(`low_confidence_reasons`)·판정기 결과 표시. mingyu_app.solutions/solution_evidence·judgments 저장은 이 단계에서 필요하면
+1. **[다음 세션 첫 작업] 간단한 프론트로 실사용** — 최소 화면. 공부 화면 B 중심 + 검수 탭 최소(답변 피드백, 보충·수정 목록)
+   - 먼저 할 일: 이번 세션 범위를 사용자와 정한다(추천: 공부 화면 B의 "질문 입력 → 답변·근거 표시"만. 피드백·검수 탭은 다음 세션). `frontend/`는 아직 없다 → Node/npm 설치 여부 확인 후 React + Vite 생성(D-021). 버전은 공식 문서로 확인해 DECISIONS에 기록
+   - 쓸 API(이미 있음): `GET /subjects`, `POST /qa` {question, k?}. 응답에서 보여줄 것: answer·explanation·confusions(본문 [n] 인용), citations(raw_text 교재 원문, book_title, page, path), status(unanswerable이면 "자료에서 확인 불가"), low_confidence + `low_confidence_reasons`(gray_no_judge / gray_judge_not_confident / gray_judge_error / no_valid_citation / mcq_inconsistent → 사람이 읽는 문구로), judge(확률), timings_ms
+   - 주의: FastAPI에 CORS 설정이 없다(`app/main.py`) → Vite dev 서버 프록시(`/qa` → 127.0.0.1:8000)로 피하거나 CORS 허용 출처를 `config.py` 설정값으로 추가. /qa는 질문당 6~15초(리랭크) → "검색 중" 표시 필수. 서버 시작 약 1분(모델 로드). Gemini 무료 한도 때문에 화면 테스트도 질문 수를 아낀다
+   - 저장: 지금은 query_logs만 쓴다. 답변 피드백·mingyu_app.solutions/solution_evidence·judgments(solution_id로 연결, D-028) 저장은 피드백 기능을 만들 때 함께(필요하면 마이그레이션, 사용자 확인 후)
+   - 판정기를 켤지(`.env` `JUDGE_PROVIDER=jev_typesafe`)는 사용자 결정 대기. 꺼져 있어도 화면은 같은 응답 형식으로 동작해야 한다
 - **끼어들기 작업: 팀원 정제 데이터가 오면 바로** 재적재·재임베딩 → "확인 불가" 기준값(0.45 / 0.03 / 0.15)과 판정기 임계값(0.5 / 0.8) 재조정 → 33문항 검색 평가·기출 15문제(`mcq_run run` 2회 + `compare`) 재평가
   - 메모: 팀원 추출 스크립트는 예제·코드·기출을 제외하므로, 받은 데이터에 R 코드·기출이 들어 있는지 먼저 확인한다(기출 15문제 평가는 지금 excluded_sections의 기출 블록에서 뽑음)
   - 재적재 방식(지금 book 3권을 바꿀지, 새 book으로 넣을지)과 DDL 필요 여부는 데이터를 받은 뒤 사용자 확인
