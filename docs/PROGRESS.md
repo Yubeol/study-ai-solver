@@ -3,7 +3,7 @@
 ## 현재 상태 (2026-10-01 질의 흐름 + 청킹 보완 설계 세션 기준)
 - 환경·문서: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
   - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`(C 여유 부족). 새 터미널부터 적용
-- 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev 키는 사용자가 .env에 넣음(TYPESAFE_API_KEY, JEV_ENABLED, JEV_MODEL, JEV_TIMEOUT_SECONDS — 코드에서는 아직 안 씀, 값 미확인). S3 미확인 → STORAGE_BACKEND=local
+- 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev는 TypeSafe 직접 API 키로 최소 요청 성공(2026-10-01, 200·jev-1.13.0, D-007). Cloudflare 값은 비어 있음. 코드에서는 아직 안 씀. S3 미확인 → STORAGE_BACKEND=local
 - DB: 마이그레이션 001, 002 적용 완료(DDL 변경 없음). **팀 교재 3권 반입 완료**: books 3행(subject=ADsP, source_name=`team_import:N과목.pdf`), pages 324행(1과목 50 / 2과목 64 / 3과목 210) 전부 EXTRACTED, processing_runs 3건(PARTIAL). 저장소 `data/storage/books/` 약 562MB
 - 백엔드 (FastAPI, `cd backend; uv run uvicorn app.main:app --reload`, 문서는 /docs)
   - /health, /health/db, 과목/자료(`GET /subjects`, `POST /books`, `GET /books?subject=`, `GET /books/{id}`), 업로드(`POST /books/{id}/pages`), 상태(`GET /books/{id}/pages`, `GET /processing-runs/{run_id}`)
@@ -32,7 +32,7 @@
 - (완료 2026-09-30) 1-a 리랭커 비교 — `BAAI/bge-reranker-v2-m3` 채택, N=10, "확인 불가" 2단계 잠정값(0.45 / 0.15). 결과는 "자체 평가 메모"와 D-024
 - (완료 2026-10-01) 1-b 질의 흐름 — 서버 메모리·시간 측정, max_length 512 비교(1024 유지), "확인 불가" 3구간, `POST /qa`(Gemini JSON·인용 검증·query_logs), 샘플 10문항(D-024, D-025)
 1. **[다음 세션] 1-c 판정기(Jev)** — 회색 구간(리랭커 1위 0.03~0.15)에서 can_answer를 불러 답변/확인 불가를 정하는 역할
-   - 시작 전 사용자 확인: 받은 키가 TypeSafe 직접 API(`api.typesafe.ai`, 대기자 명단)용인지 Cloudflare Workers AI(`typesafe/jev`)용인지. `.env`에는 `TYPESAFE_API_KEY`, `JEV_ENABLED`, `JEV_MODEL`, `JEV_TIMEOUT_SECONDS`가 있음(값은 코드·로그·출력에 내지 않기). Cloudflare 경로면 `CLOUDFLARE_ACCOUNT_ID`·`CLOUDFLARE_API_TOKEN` 필요
+   - (확인 완료 2026-10-01) 키는 TypeSafe 직접 API용, `POST https://api.typesafe.ai/v1/systemone` + Bearer, 본문 `state`·`model`(jev-latest)·`questions`(noul/choice/score) — D-007. 값은 코드·로그·출력에 내지 않기
    - 공식 문서로 요청·응답 형식 확인(추측 금지, D-007의 출처부터): 입력은 텍스트/JSON만, choice/score 응답은 confidence+probabilities. 확인 날짜·URL을 D-007에 추가
    - 구현 위치: `backend/app/judge/__init__.py`(`Judge` Protocol의 `can_answer(question, evidence) -> (bool, 신뢰도)`, `get_judge`가 지금 none 외에는 NotImplementedError) → 구현체 파일 추가(예: `app/judge/jev.py`, httpx, 시간 초과·재시도). 프롬프트·질문 문장은 `backend/app/prompts/`. 설정은 `config.py`·`.env.example`·MODIFY_GUIDE(신뢰도 임계값 포함)
    - 연결: `app/qa/service.py`의 `answer_question`이 이미 gray 구간에서 `models.judge.can_answer`를 부르고 `judge_info`를 query_logs.metadata.judge에 남김 → 판정기가 False면 "확인 불가", True면 답변(확신 낮음 해제 여부는 신뢰도 기준으로 결정). 판정기 오류·시간 초과 시 none과 같은 동작(답변 + 확신 낮음)으로 떨어지게. `mingyu_app.judgments`(question_key=can_answer) 기록은 solution 행이 없어 problem_id/solution_id가 비는데 CHECK 확인 필요
@@ -57,11 +57,9 @@
 - 리랭크 속도: CPU에서 질문당 약 4~6초(N=10, PC 부하에 따라 다름)로 /qa 전체 시간의 약 2/3. ONNX 백엔드 등은 필요해지면 검토
 - 표가 한 줄로 뭉친 청크: 3과목 p268 "오분류표를 활용한 평가지표" 표가 계산식·지표명·설명이 섞인 한 덩어리 텍스트라(팀 텍스트 원문 형태) 검색 순위가 낮음(c07). 표 청킹 방식(행 단위 분리 등)은 다음 작업 2번에서 결정
 - 3과목 216쪽은 원본 PDF·팀 텍스트 모두 없음(D-018). 필요하면 교재에서 직접 캡처해 업로드 경로로 추가
-- 받은 Jev 키가 TypeSafe 직접 API용인지 Cloudflare Workers AI용인지 미확인
 - (사용자) 2026-10-01 세션 중 GEMINI_API_KEY 값이 작업 출력(대화 기록)에 한 번 노출됨(파일·커밋에는 없음) → 필요하면 키 재발급 후 `.env` 교체
 - 레이아웃 분석 모델(PaddleOCR 계열)의 Windows + CPU 동작 여부 미확인 (D-016)
 - S3 사용 가능 여부 미확인 (pages.source_s3_uri, visual_assets.crop_s3_uri가 NOT NULL)
-- Jev Cloudflare 경로의 무료 할당량 적용 여부 미확인
 - gemini-3.7-flash는 503(일시적 과부하)만 확인, 정상 응답은 아직 못 받음
 - 서버 재시작 시 진행 중이던 BackgroundTasks는 사라진다(페이지가 중간 상태로 남음) → 다음 작업 4번 재처리 API로 보완
 - 테스트 시 경고: starlette TestClient가 httpx 대신 httpx2 사용을 권고(동작 문제 없음, 추후 교체 검토)

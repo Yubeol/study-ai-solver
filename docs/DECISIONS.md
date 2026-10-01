@@ -36,6 +36,10 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - Vercel AI Gateway, Cloudflare는 대기자 명단 없이 제공.
   - 텍스트/JSON만 입력 가능(이미지 불가). choice/score는 confidence+probabilities, noul은 확률값 하나만 반환.
   - Workers AI 무료 할당량(10,000 뉴런/일)이 서드파티 Jev에 적용되는지는 미확인.
+- **키 경로 확인(2026-10-01)**: `.env`의 `TYPESAFE_API_KEY`는 **TypeSafe 직접 API용**. `CLOUDFLARE_ACCOUNT_ID`·`CLOUDFLARE_API_TOKEN`은 키 이름만 있고 값이 비어 있음 → Cloudflare 경로는 쓰지 않는다.
+  - 공식 문서(확인 2026-10-01): `POST https://api.typesafe.ai/v1/systemone`, 헤더 `Authorization: Bearer <API_KEY>`, 본문 필수 `state`(문자열 또는 JSON), `model`(`"jev-latest"`), `questions`(이름 → 질문 객체). 질문 유형 `noul`(예/아니오 확률 0~1, `instructions`, 선택 `criteria.true/false`), `choice`(choice·probabilities·confidence), `score`(2~10단계 루브릭). 응답 `model`, `answers`(질문 이름별 `{type, noul|choice|score…}`), `usage.input_tokens/output_tokens`. 오류 401(키 없음·잘못됨) / 422(요청 검증 실패) / 429(한도 초과, 지수 백오프) / 529(과부하). 문서 안내 한도 250,000토큰/초·1,200요청/분(바뀔 수 있음)
+  - 출처: https://docs.typesafe.ai/api.md , https://docs.typesafe.ai/introduction/quickstart , https://docs.typesafe.ai/primitives/noul.md (noul 페이지 예시는 `"selectedModels": ["jev-latest"]`를 쓰지만 API 레퍼런스는 `model` → 레퍼런스 형식으로 호출해 성공)
+  - 최소 요청 1회(2026-10-01, 문서 예시 문장 + noul 질문 1개): **HTTP 200 성공**, 응답 모델 `jev-1.13.0`, 입력 283·출력 23토큰. `.env`의 `JEV_MODEL` 값은 `jev-latest`와 같음. 키·응답 헤더는 출력·기록하지 않음
 - 결정: 역할은 답변 가능 판정, 단원·유형 분류, 객관식 후보, 근거 일치 판정. JUDGE_PROVIDER로 교체하며 none에서도 서비스가 동작한다. 신뢰도 임계값은 직접 데이터로 보정한다.
 
 ## D-008 텍스트 추출은 자료 유형별 분기 (2026-09-29)
