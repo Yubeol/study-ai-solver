@@ -1,6 +1,6 @@
 # PROGRESS
 
-## 현재 상태 (2026-10-01 기출 객관식 확인·Jev 키 확인·프롬프트 조정 세션 기준)
+## 현재 상태 (2026-10-01 팀 비교 준비 세션 기준)
 - 환경·문서: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
   - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`(C 여유 부족). 새 터미널부터 적용
 - 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev는 TypeSafe 직접 API 키로 최소 요청 성공(2026-10-01, 200·jev-1.13.0, D-007). Cloudflare 값은 비어 있음. 코드에서는 아직 안 씀. S3 미확인 → STORAGE_BACKEND=local
@@ -16,56 +16,58 @@
   - **리랭커(D-024)**: `app/retrieval/rerank.py`(sentence-transformers CrossEncoder, sigmoid 0~1). 채택 `BAAI/bge-reranker-v2-m3`, 벡터 후보 N=10, 입력 embedding_text, 캐시 `E:\hf_models`(bge-m3 + 리랭커 2개 = 8.51GB). `search.py`는 `RERANKER_MODEL`이 있으면 리랭크하고 "확인 불가" 2단계 판단 `is_answerable`(1단계 벡터 1위 ≥ 0.45, 2단계 리랭커 1위 ≥ 0.15, **33문항 기준 잠정값**). 평가는 `evaluate --reranker <모델|none> --n --rerank-input`. CPU에서 질문당 리랭크 평균 6.0초·최대 10.2초
   - **"확인 불가" 3구간(구현 2026-10-01)**: `is_answerable` → (reject/gray/answer, 이유). 벡터 하한 0.45, 리랭커 하한 `ANSWERABLE_MIN_RERANK_SCORE`=0.03, 상한 `ANSWERABLE_CONFIDENT_RERANK_SCORE`=0.15(33문항 기준 잠정값)
   - **질의 API `POST /qa`(D-025)**: `app/qa/service.py` — 검색(N=10 → 리랭크 → K=5) → 3구간 → Gemini JSON 답변(`app/llm/gemini.py`, generateContent + responseJsonSchema, 재시도·폴백) → 인용 번호 검증(범위 밖 제거·기록) → `query_logs`(metadata에 판정·단계별 시간). 프롬프트 `backend/app/prompts/answer_*`. LLM 입력은 clean_text+제목 경로+과목·쪽, 응답 근거는 raw_text. 서버 시작 시 임베딩·리랭커 로드+워밍업(약 1분, RSS 약 4.6GB). 판정기는 none만(`app/judge`). 샘플 실행 `python -m app.qa.sample_run --ids …`(최대 12개) → `data/reports/answers/`
-  - **기출 객관식 확인 `python -m app.qa.mcq_run`**(extract → run → report): excluded_sections(exam_question) 원문 위치로 기출 블록 파싱(엄격, 109문제 중 24 성공) → 선택 파일 `data/eval/mcq_selection.json`(15문제) → /qa 실행(간격 `MCQ_REQUEST_INTERVAL_SECONDS`) → 사람이 채점한 grades.json을 합쳐 과목별 정답률·원인 요약 → `data/reports/mcq/`
+  - **기출 객관식 확인 `python -m app.qa.mcq_run`**(extract → run → report → compare): excluded_sections(exam_question) 원문 위치로 기출 블록 파싱(엄격, 109문제 중 24 성공) → 선택 파일 `data/eval/mcq_selection.json`(15문제) → /qa 실행(간격 `MCQ_REQUEST_INTERVAL_SECONDS`) → **자동 채점**(답의 "정답은 ③" 번호 ↔ 정답, ①~④/1~4/(1)~(4) 같은 번호, 거절·번호 못 뽑음은 "검토 필요" → grades.json에 이유와 함께 수동 채점) → 과목별 정답률(틀림 따로)·비교용 표·답변 전문 → `compare`로 여러 실행·기준선 비교 → `data/reports/mcq/`
+  - **답변 온도 0 고정**(`ANSWER_TEMPERATURE`, D-025 추가), **객관식 보기별 판단·풀이 형식**(프롬프트 규칙 8, D-027). 인용 검사에서 "③은 근거에서 확인되지 않는다." 보기 줄은 인용 없는 문장으로 세지 않음(`unsupported_option_sentences`)
   - 서버 메모리·시간(D-024 추가): 두 모델 동시 RSS 최대 4.66GB, 질문당 임베딩 0.1초·벡터 0.4초·리랭크 약 4초·LLM 약 1.7초 → 전체 약 6~7초. `RERANKER_MAX_LENGTH` 512는 1024와 결과·시간 같아 1024 유지
   - detect_visuals는 `StageNotImplemented` → 업로드 경로 기본 파이프라인은 여전히 **EXTRACTED에서 멈춤**
   - 모델 캐시: `OCR_MODEL_DIR=E:\paddle_models` (현재 19MB, 쓰는 모델 2개만)
   - 속도(맑은 고딕으로 만든 A4 30줄): 1장 약 16초, 평균 신뢰도 0.994. **실제 교재 스캔으로는 아직 미측정**
-- 테스트: `uv run pytest` 105개 통과(기출 객관식 파서 8개·인용 없는 문장 수 2개 추가, 가짜 OCR·가짜 임베더·가짜 리랭커·가짜 LLM, 청킹 규칙 10개, 실행 중단 1개, 평가 계산 6개, 평가 보고서 2개, 리랭크·3구간 6개, 질의 흐름·Gemini 재시도·query_logs·/qa 12개 포함), `-m ocr_model` 1개, `-m embedding_model` 1개(실제 BGE-M3), `-m reranker_model` 1개(실제 v2-m3) 통과
+- 테스트: `uv run pytest` 110개 통과(2026-10-01 보기 번호 인식·자동 채점·실행 비교 4개, 객관식 보기 줄 인용 검사 1개 추가 / 기출 객관식 파서 8개·인용 없는 문장 수 2개, 가짜 OCR·가짜 임베더·가짜 리랭커·가짜 LLM, 청킹 규칙 10개, 실행 중단 1개, 평가 계산 6개, 평가 보고서 2개, 리랭크·3구간 6개, 질의 흐름·Gemini 재시도·query_logs·/qa 12개 포함), `-m ocr_model` 1개, `-m embedding_model` 1개(실제 BGE-M3), `-m reranker_model` 1개(실제 v2-m3) 통과
 - 프론트엔드: 미생성
 - 문서: 설계 보완(오답노트·검수 도구·시각자료 표시 원칙·팀 교재 반입·crop 계획, D-014~D-017). 사용자용 문서 `docs/sessions/`(세션별 설명), `docs/MODIFY_GUIDE.md`(수정 위치 표) — 세션 시작 시 읽지 않음. 팀 공유 문서 `docs/team/`(교재 원문·내 스키마·.env 값 없이 원리 + 독립 함수 예시): `paddleocr-windows-cpu.md`(검증 완료), `cross-page-code.md`(설계 초안, 검증 전)
 - 팀 방향(D-021): 공용 프론트 없이 각자 개인 프로젝트. 팀 규격 테이블 "기존 컬럼 변경 금지·추가만" 유지, mingyu_app·API는 자유
 - 규칙 추가(CLAUDE.md): 조정 가능한 값은 `.env`/`config.py` 한 곳, LLM 프롬프트는 `backend/app/prompts/` 텍스트 파일. /wrap은 세션 설명 파일까지 작성
 
-## 다음 작업 (2026-10-01 순서: 청킹 보완 → 판정기(Jev) → 최소 화면 — Jev 직접 API 확인 성공에 따름)
-설계는 ARCHITECTURE의 "질의 흐름"(검색 단계 상세, 검색 평가), "이론 보충·수정", "팀 교재 반입 경로", "시각자료 crop 파이프라인", "품질 검수 도구", "오답노트" 절과 D-014~D-021 참고.
-- (완료 2026-09-30) 검색 평가 실행 — 결과·틀린 질문 분류는 "자체 평가 메모". 확인 불가 임계값은 **확정하지 않음**(리랭커 점수로 다시 평가 후 결정). 정답 쪽 기준 확정(D-023: 그 쪽만 보고 답할 수 있으면 정답) → a06·c07 검토 결과 변경 없음. "확인 불가" 2단계 판단 설계(ARCHITECTURE)
-- (완료 2026-09-30) 1-a 리랭커 비교 — `BAAI/bge-reranker-v2-m3` 채택, N=10, "확인 불가" 2단계 잠정값(0.45 / 0.15). 결과는 "자체 평가 메모"와 D-024
-- (완료 2026-10-01) 1-b 질의 흐름 — 서버 메모리·시간 측정, max_length 512 비교(1024 유지), "확인 불가" 3구간, `POST /qa`(Gemini JSON·인용 검증·query_logs), 샘플 10문항(D-024, D-025)
-1. **[다음 세션 첫 작업] 청킹 보완: 표·수식 뭉침 + 페이지를 넘는 R 코드(D-026)** — 순서: 구현 → 해당 쪽 재청킹·재임베딩 → 33문항 검색 평가 + 기출 15문제(`mcq_run run`, 선택 파일 그대로) 재평가 → `docs/team/cross-page-code.md` 완성
-   - 표·수식 뭉침: 팀 텍스트에서 표·계산식이 한 줄로 이어진 청크가 리랭커 점수·검색 순위가 낮음 — c06(3과목 p245~247 시계열 정상화, 리랭커 0.043), c07(p268 오분류표 평가지표, 0.208), c09(p339 연관규칙 측정 지표 표, 0.066). 할 일: 이런 청크를 찾는 기준(예: 숫자·기호 비율, 줄바꿈 없는 긴 문단) → 행 단위 분리나 표 제목·지표명 앞세우기 등 방식 결정(`backend/app/ingestion/chunking.py`, D-019) → 해당 쪽만 재청킹·재임베딩(`run_stages --stages chunk,embed --pages`) → 같은 33문항으로 재평가해 세 질문 순위·리랭커 점수 확인. `theory_chunks.raw_text`는 원문 그대로 유지(CLAUDE.md)
-   - 기출 확인에서 추가된 대상(2026-10-01): 3과목 p280 "선형회귀분석 vs 로지스틱 회귀분석 비교" 표 뭉침 → 답변이 모형 탐색 방법을 검정 방법에 섞음(기출 p286-1, 프롬프트 조정으로 안 고쳐짐)
-   - (2026-10-01 추가, 설계 D-026·ARCHITECTURE "이론 청킹 보완: 페이지를 넘는 코드 블록") 페이지를 넘어 이어지는 R 코드: 코드 블록 인식 규칙 + 이어짐 판단(앞 페이지 마지막 본문 줄·다음 첫 본문 줄이 코드, 사이 제목 없음) → 이어진 코드 블록만 한 청크로(page_id=시작 페이지, `source_alignment.spans`에 전체 페이지, 출처 "226~227쪽"), 코드+출력은 같은 청크, 코드 청크 embedding_text = 제목 경로 + 앞 설명 문장 + 코드(부족하면 Gemini 설명문). 재청킹은 이어진 앞뒤 페이지를 함께. 질의 API·평가 보고서의 쪽 표시와 정답 쪽 판정도 spans를 읽게 고침
-   - 확인: 135·142·143쪽 첫 청크(지금 needs_review)가 앞 페이지 코드와 합쳐지는지, 조사 오검출(그래프 축 글자 272→273·303→304·337→338 등)이 코드로 묶이지 않는지 → 33문항 재평가
-   - 마지막 단계: 구현 후 팀 공유 문서 `docs/team/cross-page-code.md` 완성("구현 후 채울 칸": 실제 코드 위치, 적용 전후 건수·검색 결과 비교, 상태를 "검증 완료"로)
-2. **판정기(Jev)** (청킹 보완 뒤) — 회색 구간(리랭커 1위 0.03~0.15)에서 can_answer를 불러 답변/확인 불가를 정하는 역할
-   - (확인 완료 2026-10-01) 키는 TypeSafe 직접 API용, `POST https://api.typesafe.ai/v1/systemone` + Bearer, 본문 `state`·`model`(jev-latest)·`questions`(noul/choice/score) — D-007. 값은 코드·로그·출력에 내지 않기
-   - 구현 전 다시 볼 문서: D-007 출처(api.md, primitives/noul·choice). noul 페이지 예시의 `selectedModels`와 API 레퍼런스의 `model`이 다름 → 레퍼런스 형식(`model`)으로 성공함
-   - 구현 위치: `backend/app/judge/__init__.py`(`Judge` Protocol의 `can_answer(question, evidence) -> (bool, 신뢰도)`, `get_judge`가 지금 none 외에는 NotImplementedError) → 구현체 파일 추가(예: `app/judge/jev.py`, httpx, 시간 초과·재시도). 프롬프트·질문 문장은 `backend/app/prompts/`. 설정은 `config.py`·`.env.example`·MODIFY_GUIDE(신뢰도 임계값 포함)
-   - 연결: `app/qa/service.py`의 `answer_question`이 이미 gray 구간에서 `models.judge.can_answer`를 부르고 `judge_info`를 query_logs.metadata.judge에 남김 → 판정기가 False면 "확인 불가", True면 답변(확신 낮음 해제 여부는 신뢰도 기준으로 결정). 판정기 오류·시간 초과 시 none과 같은 동작(답변 + 확신 낮음)으로 떨어지게. `mingyu_app.judgments`(question_key=can_answer) 기록은 solution 행이 없어 problem_id/solution_id가 비는데 CHECK 확인 필요
-   - 테스트: 가짜 판정기로 gray 분기(True/False/오류) — `backend/tests/test_qa.py`에 추가. 실제 호출은 샘플 몇 개만(c06·c09·n08 회색 3개)
-   - 주의: 서버는 시작 시 모델 로딩 약 1분(RSS 약 4.6GB). 샘플 실행은 `python -m app.qa.sample_run --ids c06,c09,n08`(서버 켠 상태, Gemini 무료 한도 — 전체 33개 금지)
-   - 같이 볼 것: 근거 일치 판정(verify, ARCHITECTURE 질의 흐름 5단계)은 판정기 붙인 뒤. mingyu_app.solutions/solution_evidence 상세 저장은 화면(3번) 만들 때 필요하면
-   - 같이 볼 것(2026-10-01 기출 확인): 객관식에서 "보기 하나라도 근거 없으면 전체 거절"이 확인 불가 4개의 원인. Jev 역할 중 "객관식 후보"(D-007, choice 질문)나 답변 프롬프트의 객관식 전용 처리로 개선할지 이 단계에서 결정. 기출 15문제 결과는 실행마다 1~2문제 흔들리므로 비교는 2회 이상 실행 기준으로
-   - (완료 2026-10-01) 답변 프롬프트 조정(근거 문장 하나당 한 문장, explanation·confusions 모든 문장 [n], "~다"체) + citation_check에 인용 없는 문장 수 — 결과는 "자체 평가 메모"
-3. 간단한 프론트로 실사용 — 최소 화면, 판정기 뒤(공부 화면 B 중심 + 검수 탭 최소: 답변 피드백, 보충·수정 목록)
-4. 이론 보충·수정 (ARCHITECTURE "이론 보충·수정", material_type user_supplement·mingyu_app.chunk_corrections 마이그레이션은 사용자 확인 후)
-5. 팀 텍스트 품질 비교: 몇 쪽(1과목 14쪽, 3과목 226쪽 등)을 팀 텍스트 / PaddleOCR mobile / Gemini 비전으로 뽑아 원본 이미지와 비교(정확도·누락·표/수식 처리, 속도·비용). 기존 "PaddleOCR 실제 교재 품질 측정"을 대체
-6. crop / 시각자료: 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽, D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터) → 그래프 포함 문제 10개로 추출 정확도 확인(D-015) → crop 전체 확장 + 설명문 생성(Gemini, 재시도·폴백 D-010)
-7. 오답노트 (D-017, mingyu_app 마이그레이션은 사용자 확인 후)
-8. 손필기(personal_note) 비전 LLM 추출
+## 다음 작업 (2026-10-01 순서: 판정기(Jev) → 최소 화면. 팀 비교는 상대 데이터 준비 전까지 보류)
+설계는 ARCHITECTURE의 "질의 흐름", "판정기", "화면" 절과 D-007, D-024~D-027 참고.
+- (완료 2026-10-01) 팀 비교 준비 — 답변 온도 0 고정, 객관식 보기별 판단 규칙(D-027), 기출 자동 채점·실행 비교 리포트(`mcq_run compare`), DB 소스 확인. 결과는 "자체 평가 메모"
+1. **[다음 세션 첫 작업] 판정기(Jev)** — 회색 구간(리랭커 1위 0.03~0.15)에서 can_answer를 불러 답변할지 "확인 불가"로 할지 정한다
+   - (확인 완료 2026-10-01) 키는 TypeSafe 직접 API용이다. `POST https://api.typesafe.ai/v1/systemone` + Bearer, 본문 `state`·`model`(jev-latest)·`questions`(noul/choice/score) — D-007. 키 값은 코드·로그·출력에 내지 않는다
+   - 구현 전 다시 볼 문서: D-007 출처(api.md, primitives/noul·choice). noul 페이지 예시의 `selectedModels`와 API 레퍼런스의 `model`이 다르다 → 레퍼런스 형식(`model`)으로 호출해 성공함
+   - 구현 위치: `backend/app/judge/__init__.py`(`Judge` Protocol의 `can_answer(question, evidence) -> (bool, 신뢰도)`, 지금 `get_judge`는 none 외에는 NotImplementedError) → 구현체 파일 추가(예: `app/judge/jev.py`, httpx, 시간 초과·재시도). 프롬프트·질문 문장은 `backend/app/prompts/`. 설정은 `config.py`·`.env.example`·MODIFY_GUIDE에 둔다(신뢰도 임계값 포함)
+   - 연결: `app/qa/service.py`의 `answer_question`이 이미 gray 구간에서 `models.judge.can_answer`를 부르고 `judge_info`를 query_logs.metadata.judge에 남긴다 → 판정기가 False면 "확인 불가", True면 답변(확신 낮음 해제 여부는 신뢰도로 결정). 판정기 오류·시간 초과 시에는 none과 같은 동작(답변 + 확신 낮음). `mingyu_app.judgments`(question_key=can_answer) 기록은 solution 행이 없어 problem_id/solution_id가 비는데, 이때 CHECK에 걸리는지 확인 필요
+   - 테스트: 가짜 판정기로 gray 분기(True/False/오류)를 `backend/tests/test_qa.py`에 추가한다. 실제 호출은 샘플 몇 개만(c06·c09·n08 회색 3개)
+   - 주의: 서버 시작 시 모델 로딩 약 1분(RSS 약 4.6GB). 샘플 실행은 `python -m app.qa.sample_run --ids c06,c09,n08`(서버 켠 상태, Gemini 무료 한도 때문에 전체 33개 금지)
+   - 같이 볼 것: 객관식 "근거 없는 보기 둘 이상인데 고름"(p84-1, D-027 한계) → Jev choice 질문이나 코드 검사(근거 없는 보기 줄 ≥ 2면 거절)로 보완할지 이 단계에서 결정. 남은 거절 p26-3(어긋나는 근거가 있는데도 거절)도 함께 본다
+   - 같이 볼 것: 근거 일치 판정(verify, ARCHITECTURE 질의 흐름 5단계)은 판정기를 붙인 뒤. mingyu_app.solutions/solution_evidence 상세 저장은 화면(2번)에서 필요하면
+2. **간단한 프론트로 실사용** — 최소 화면. 공부 화면 B 중심 + 검수 탭 최소(답변 피드백, 보충·수정 목록)
+- **끼어들기 작업: 팀원 정제 데이터가 오면 바로** 재적재·재임베딩 → "확인 불가" 기준값(0.45 / 0.03 / 0.15) 재조정 → 33문항 검색 평가·기출 15문제(`mcq_run run` 2회 + `compare`) 재평가
+  - 메모: 팀원 추출 스크립트는 예제·코드·기출을 제외하므로, 받은 데이터에 R 코드·기출이 들어 있는지 먼저 확인한다(기출 15문제 평가는 지금 excluded_sections의 기출 블록에서 뽑음)
+  - 재적재 방식(지금 book 3권을 바꿀지, 새 book으로 넣을지)과 DDL 필요 여부는 데이터를 받은 뒤 사용자 확인
+- **데이터 확정 후**
+  - 청킹 보완: 표·수식 뭉침(c06 p245~247, c07 p268, c09 p339, p280 회귀 비교표 → 기출 p286-1에서 탐색 방법을 검정 방법에 섞음), 페이지를 넘는 R 코드(D-026, ARCHITECTURE "이론 청킹 보완" 절, 135·142·143쪽 needs_review, `docs/team/cross-page-code.md` 완성). 순서: 구현 → 해당 쪽 재청킹·재임베딩 → 33문항·기출 재평가
+  - 시각자료: 검수 HTML 보고서 + 3과목 crop 시범(224~230쪽, D-016, 레이아웃 모델 Windows+CPU 지원 여부 공식 문서 확인부터) → 그래프 포함 문제 10개로 추출 정확도 확인(D-015) → crop 전체 확장 + 설명문 생성(Gemini, 재시도·폴백 D-010)
+- 그 뒤: 이론 보충·수정(ARCHITECTURE "이론 보충·수정", 마이그레이션은 사용자 확인 후) → 오답노트(D-017) → 손필기(personal_note) 비전 LLM 추출. 팀 텍스트 품질 비교(팀 텍스트 / PaddleOCR / Gemini 비전)는 팀원 정제 데이터가 오면 그 데이터와 함께 다시 정한다
+- **보류**
+  - 팀 비교: 팀원 프로젝트와 같은 질문으로 답변 결과를 비교해 어느 쪽으로 합칠지 정한다. 상대 쪽이 준비되면 재개하고, 팀원 질문 세트를 받으면 같은 형식(`mcq_run`/`sample_run`)으로 실행한다
+  - 답변 캐시: 같은 질문·같은 근거면 Gemini를 다시 부르지 않기(무료 한도 절약)
+  - 객관식은 문제 본문만으로 검색·리랭크: 보기 4개가 붙어 리랭크 입력이 길어지면서 시간이 늘어난다(리랭크 6~13초)
 - 틈틈이: 재처리 API(FAILED/REVIEW_REQUIRED/멈춘 페이지), 자료 삭제 시 저장 파일 정리, (사용자) S3 팀 버킷 유무 문의
+- 배경 메모(2026-10-01)
+  - **DB 소스 확인(읽기 전용)**: pages 324쪽 전부 `engine=team_text`이고, 원본은 text.zip을 푼 `data/raw/adsp/team_text/과N/과N-XXXp.txt`(쪽별 txt)다. 이론·표·코드 청크(theory_chunks 616개, `source_alignment.method=page_text_lines`)와 기출 블록(excluded_sections exam_question 87건, 같은 `.text.json`의 줄 범위)이 모두 이 텍스트에서 왔다. 예: 3과목 135쪽 R 코드 청크 ← `과3-135p.txt`, 280쪽 표 청크 ← `과3-280p.txt`. 팀원 구조화 결과 JSON(theory_blocks, tables 등)은 쓰지 않았고, visual_assets·visual_tables·formulas는 0행이다
+  - text.zip은 페이지 사진 전체를 OCR한 것이라 상자 옆 설명글·코드·축 숫자·색인 탭 글자가 본문과 한 줄로 섞여 있다. 텍스트 규칙으로는 복구하기 어렵다(표·수식 뭉침, 그래프 글자 오검출의 원인)
+  - processing_runs: RUNNING 없음. PARTIAL 3건은 팀 교재 반입 run(`team-import-0.1-team-text`, 50/64/210쪽)이다. 반입 시 EXTRACTED까지만 갔고 이 상태는 집계상 미완료라 PARTIAL로 남은 것으로, 설계상 정상이다(D-012·D-018). 이후 chunk·embed run 7건(SUCCESS)이 이어서 처리해 지금 324쪽 전부 EMBEDDED, review_required 0. `pages.processing_run_id`는 반입 run을 계속 가리킨다(run_stages가 갱신하지 않음)
 
 ## 막힌 것 / 확인 필요
-- 리랭커 점수가 낮은 정답 청크(D-024): c06·c09는 3구간 구현으로 회색 구간 → 답변 + "근거 확신 낮음"(2026-10-01 샘플에서 확인). 청킹 보완은 다음 작업 1번. 값은 33문항 기준 잠정값 → 실사용 질문으로 다시 재야 함
+- 리랭커 점수가 낮은 정답 청크(D-024): c06·c09는 3구간 구현으로 회색 구간 → 답변 + "근거 확신 낮음"(2026-10-01 샘플에서 확인). 청킹 보완은 데이터 확정 후(다음 작업). 값은 33문항 기준 잠정값 → 실사용 질문으로 다시 재야 함
 - 리랭크 속도: CPU에서 질문당 약 4~6초(N=10, PC 부하에 따라 다름)로 /qa 전체 시간의 약 2/3. ONNX 백엔드 등은 필요해지면 검토
-- 표가 한 줄로 뭉친 청크: 3과목 p268 "오분류표를 활용한 평가지표" 표가 계산식·지표명·설명이 섞인 한 덩어리 텍스트라(팀 텍스트 원문 형태) 검색 순위가 낮음(c07). 표 청킹 방식(행 단위 분리 등)은 다음 작업 1번에서 결정
+- 표가 한 줄로 뭉친 청크: 3과목 p268 "오분류표를 활용한 평가지표" 표가 계산식·지표명·설명이 섞인 한 덩어리 텍스트라(팀 텍스트 원문 형태) 검색 순위가 낮음(c07). 표 청킹 방식(행 단위 분리 등)은 데이터 확정 후 청킹 보완에서 결정
 - 3과목 216쪽은 원본 PDF·팀 텍스트 모두 없음(D-018). 필요하면 교재에서 직접 캡처해 업로드 경로로 추가
 - (사용자) 2026-10-01 세션 중 GEMINI_API_KEY 값이 작업 출력(대화 기록)에 한 번 노출됨(파일·커밋에는 없음) → 필요하면 키 재발급 후 `.env` 교체
 - 레이아웃 분석 모델(PaddleOCR 계열)의 Windows + CPU 동작 여부 미확인 (D-016)
 - S3 사용 가능 여부 미확인 (pages.source_s3_uri, visual_assets.crop_s3_uri가 NOT NULL)
 - gemini-3.7-flash는 503(일시적 과부하)만 확인, 정상 응답은 아직 못 받음
-- 서버 재시작 시 진행 중이던 BackgroundTasks는 사라진다(페이지가 중간 상태로 남음) → 다음 작업 4번 재처리 API로 보완
+- 서버 재시작 시 진행 중이던 BackgroundTasks는 사라진다(페이지가 중간 상태로 남음) → 재처리 API(다음 작업 "틈틈이")로 보완
 - 테스트 시 경고: starlette TestClient가 httpx 대신 httpx2 사용을 권고(동작 문제 없음, 추후 교체 검토)
 - paddlepaddle 3.3.x oneDNN 버그로 enable_mkldnn=False(속도 손해). Paddle 업데이트 시 재확인(D-013)
 - processing_runs.paddle_model 컬럼은 아직 채우지 않음(모델 정보는 page_metadata.ocr에 있음)
@@ -129,6 +131,13 @@
     - 개선이 확인된 것(형식): 답변한 문제의 explanation·confusions 문장 31→43개 중 인용 없는 문장 1→0. p256-1 설명 이유가 맞게 바뀜, p126-1 설명이 문장마다 인용
   - **같은 조정의 10문항 샘플(sample_run, `data/reports/answers/20261001-171042.md`)**: 판정·인용 쪽은 전과 같음(답변 7, 확인 불가 3). explanation·confusions 문장 18→23개 중 인용 없는 문장 2→0(a01 confusions, c01 confusions), "~습니다"체 문장 4→0(c01). c07은 F1 설명이 민감도 문장에 섞이던 것이 사라짐("민감도와 재현율은 같은 성능평가지표로 함께 언급된다 [1]"). n08 확인 불가 설명에도 인용이 붙음
     - 부작용: confusions가 빈 답 0→2(a01은 인용 없던 문장이 빠짐, c06은 인용 있던 분산·계절차분 문장까지 빠짐), b05는 explanation 마지막 문장과 confusions가 같은 문장 반복, c01 answer는 두 근거를 긴 한 문장으로 이음(answer는 1~2문장 제한 때문). 필요하면 다음 프롬프트 조정 후보
+  - **2026-10-01 팀 비교 준비 / 온도 0 + 객관식 규칙 8(보기별 판단, 부정형 1순위 어긋남·2순위 근거 없음 하나, 풀이 형식), 그 밖의 설정 같음 / 같은 15문제 2회** (`data/reports/mcq/20261001-183237.md`, `20261001-183551.md`, 비교 `compare-20261001-183624.md`)
+    - 결과(두 실행 동일): **맞음 12 / 틀림 0 / 확인 불가 2 / 답이 모호함 1 (80%)**. 과목별 3/5 · 4/5 · 5/5. 기준선(171504) 맞음 9 / 틀림 0 / 확인 불가 5 / 모호 1(60%)
+    - 자동 채점 13맞음·검토 필요 2(거절)였고, 수동으로 p84-1을 맞음 → 답이 모호함으로 낮춤(①·② 둘 다 "근거에 없다"고 쓰고도 ①을 골라 규칙 8 위반, answer 인용 [1]은 ③의 근거)
+    - **실행 간 바뀐 문제 없음**(고른 번호·판정 같음, 인용 번호 구성만 p26-2·p84-1·p128-1에서 조금 다름). 시간 5.4~8.1초(기준선 8.5~15.8초보다 짧음 — PC 부하 차이로 보임, 코드상 검색 단계 변화 없음)
+    - 기준선 대비: 거절이 풀림 p26-2·p56-1·p99-1(모두 맞음), p232-1 모호 → 맞음. 남은 거절 p26-3(근거 p27 "데이터 마트는 일부 데이터·특정 사용자"가 ④와 어긋나는데도 거절 — 기준선에서도 실행마다 맞음/거절로 흔들리던 문제), p50-2(사례 연결형, 근거 약함). **틀림 0 유지**
+    - 인용 없는 문장: 30회 답변 중 4문제에 1~2문장(p84-1 "근거에 없어 확인되지 않는다"처럼 문구가 달라 예외에 안 걸림, p26-3·p50-2 거절 설명, p232-1). 보기 줄 예외로 빠진 문장 수는 문제당 0~2
+    - 일반 질문 회귀(10문항 sample_run, `data/reports/answers/20261001-182909.md`): 판정 답변 7 / 확인 불가 3, 인용 쪽 모두 이전과 같음(c09는 339·342 → 339만). n08 거절 설명에 인용 없는 문장 1
 
 ## 완료 기록
 - 2026-09-29: 저장소 초기 구조, uv 환경, GitHub 연결, 운영 문서 5종, Gemini 모델 확인
@@ -146,3 +155,4 @@
 - 2026-10-01: 질의 흐름(1-b) — 서버 메모리·단계별 시간 측정(RSS 최대 4.66GB, 첫 질문 임베딩 26초 → 시작 시 워밍업), RERANKER_MAX_LENGTH 512 비교(1024 유지), "확인 불가" 3구간(0.45 / 0.03 / 0.15), `POST /qa`(Gemini JSON 구조화 출력, 인용 검증, query_logs.metadata 기록, 모델 사전 로딩), 샘플 10문항 실행 (D-024 추가, D-025, 테스트 95개)
 - 2026-10-01: 청킹 보완 설계(코드 변경 없음) — 페이지를 넘는 R 코드 조사(엄격 9건·완화 41건, 뒷부분 needs_review 3건), D-026(이어진 코드 블록만 페이지 넘김 예외, 쪽 범위 출처, crop 세로 이어 붙이기), 팀 공유 문서 `docs/team/`(PaddleOCR Windows+CPU 설정, 페이지 넘는 코드 처리 초안)
 - 2026-10-01: 기출 객관식 15문제로 답변 품질 기준선(맞음 10·확인 불가 4·모호 1, 확인 불가는 모두 LLM 보수적 거절), Jev TypeSafe 직접 API 최소 요청 성공(D-007), 답변 프롬프트 조정(근거 문장 단위·모든 문장 인용·~다체) + 인용 없는 문장 수 기록 → 형식 개선 확인, 정답률 차이는 실행 간 흔들림 안. 다음 순서 청킹 보완 → 판정기 → 최소 화면 (테스트 105개)
+- 2026-10-01: 팀 비교 준비 — 답변 온도 0 고정, 객관식 보기별 판단 규칙·풀이 형식(D-027), 기출 자동 채점·실행 비교(`mcq_run compare`), 기출 15문제 2회 맞음 12·틀림 0(기준선 9·0, 실행 간 바뀜 없음), DB 소스 확인(324쪽 전부 text.zip, 구조화 JSON 미사용), PARTIAL run 3건 확인(반입 run, 정상). 다음 순서 판정기 → 최소 화면, 팀원 정제 데이터 오면 재적재 끼어들기, 청킹 보완·시각자료는 데이터 확정 후, 팀 비교 보류 (테스트 110개)

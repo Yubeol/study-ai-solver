@@ -33,6 +33,9 @@ _INLINE_CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")  # [1], [1, 2]
 # 문장 경계: 마침표·물음표·느낌표 뒤 공백(바로 뒤가 인용 "[n]"이면 같은 문장으로 본다) 또는 줄바꿈
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?!\[)|\n+")
 CITATION_REQUIRED_FIELDS = ("explanation", "confusions")  # 모든 문장에 [n] 인용이 있어야 하는 필드
+# 객관식 풀이(프롬프트 규칙 8)에서 근거가 없는 보기 줄: "③은 근거에서 확인되지 않는다." — 인용 없는 게 맞는 문장
+_UNSUPPORTED_OPTION = re.compile(
+    r"^\s*(?:[①②③④]|\(?\s*[1-4]\s*\)?\s*번?)\s*(?:은|는)\s*\[?근거\]?에서\s*확인되지\s*않는다")
 
 
 @dataclass
@@ -125,13 +128,23 @@ def validate_citations(data: dict, n_evidence: int) -> tuple[list[int], dict]:
         "inline_not_in_cited": sorted(inline_valid - set(cited)),
         "uncited_sentences": uncited,
         "uncited_sentence_count": sum(uncited.values()),
+        "unsupported_option_sentences": count_unsupported_options(data.get("explanation") or ""),
     }
 
 
+def _sentences(text: str) -> list[str]:
+    return [s for s in _SENTENCE_SPLIT.split(text) if re.search(r"[가-힣A-Za-z]", s)]
+
+
 def count_uncited_sentences(text: str) -> int:
-    """[n] 인용이 하나도 없는 문장 수. 글자가 없는 조각(목록 기호 등)은 세지 않는다."""
-    return sum(1 for s in _SENTENCE_SPLIT.split(text)
-               if re.search(r"[가-힣A-Za-z]", s) and not _INLINE_CITE.search(s))
+    """[n] 인용이 하나도 없는 문장 수. 글자가 없는 조각(목록 기호 등)과
+    객관식의 "③은 근거에서 확인되지 않는다." 줄(인용이 없는 게 맞음)은 세지 않는다."""
+    return sum(1 for s in _sentences(text) if not _INLINE_CITE.search(s) and not _UNSUPPORTED_OPTION.match(s))
+
+
+def count_unsupported_options(text: str) -> int:
+    """객관식 풀이에서 "근거에서 확인되지 않는다"고 쓴 보기 줄 수."""
+    return sum(1 for s in _sentences(text) if _UNSUPPORTED_OPTION.match(s))
 
 
 def answer_question(conn: psycopg.Connection, settings: Settings, models: QaModels, question: str,

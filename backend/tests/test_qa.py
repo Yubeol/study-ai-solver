@@ -109,6 +109,19 @@ def test_uncited_sentence_count():
     assert count_uncited_sentences("") == 0 and count_uncited_sentences("값은 0.5이다 [1].") == 0
 
 
+def test_mcq_explanation_unsupported_option_lines_not_counted_as_uncited():
+    # 객관식 풀이 형식(프롬프트 규칙 8): 보기마다 한 줄, 근거 없는 보기는 인용 없이 "확인되지 않는다"
+    data = {"cited": [1, 2], "answer": "정답은 ②이다 [2].",
+            "explanation": "①은 가가 나이므로 적절하다 [1].\n②는 다다와 어긋나므로 적절하지 않다 [2].\n"
+                           "③은 근거에서 확인되지 않는다.\n(4)는 근거에서 확인되지 않는다.",
+            "confusions": ""}
+    _, check = validate_citations(data, 2)
+    assert check["uncited_sentence_count"] == 0
+    assert check["unsupported_option_sentences"] == 2
+    # 보기 줄이 아닌 문장에 같은 말이 있으면 여전히 인용 없는 문장으로 센다
+    assert count_uncited_sentences("이 내용은 근거에서 확인되지 않는다.") == 1
+
+
 def test_reject_zone_skips_llm(monkeypatch, qa_settings, logged):
     llm = FakeLlm({})
     r = _run(monkeypatch, qa_settings, _rows(), [0.01, 0.005, 0.0], llm)

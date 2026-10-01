@@ -127,7 +127,7 @@ adsp-study-rag/
   - 반입 결과: 3권 324페이지 EXTRACTED, run PARTIAL. 리포트 `data/reports/team_import/apply_{key}.json`
 - PaddleOCR 경로는 새로 업로드하는 캡처용으로 유지한다(우선순위만 뒤로).
 
-### 이론 청킹 보완: 페이지를 넘는 코드 블록 (설계 2026-10-01, D-026 — 구현은 다음 작업 2번 "청킹 보완")
+### 이론 청킹 보완: 페이지를 넘는 코드 블록 (설계 2026-10-01, D-026 — 구현은 PROGRESS 다음 작업 "데이터 확정 후 — 청킹 보완")
 현재 규칙(D-019)은 청크가 페이지를 넘지 않아서, 페이지를 넘어 이어지는 R 코드가 둘로 갈리고 뒷부분이 짧은 출력 조각이면 needs_review로 검색에서 빠진다(조사: PROGRESS "자체 평가 메모").
 1. **코드 줄 인식**(clean 기준, 머리말·쪽번호 줄은 이미 빠진 상태): 아래 중 하나이고 `#` 앞 코드 부분의 한글 비율이 낮은 줄
    - 프롬프트 `>`로 시작 / 이어짐 `+ `로 시작 / 대입 `<-` / 함수 호출 `이름(`(library(, summary( 등)
@@ -142,7 +142,7 @@ adsp-study-rag/
    - 다음 페이지는 `page_metadata.chunking.continued_from = {page_id, line_range}`로 앞 페이지 청크가 가져간 줄을 기록. 한 페이지만 다시 청킹할 때(`run_stages --pages`)는 이어진 앞·뒤 페이지를 함께 다시 처리해야 한다(구현 시 범위 자동 확장).
 5. **코드와 실행 결과는 같은 청크**: 출력 줄은 바로 앞 코드와 붙여 두고, 출력만 따로 떨어진 청크를 만들지 않는다(길이 상한 `CHUNK_MAX_CHARS`로 나눌 때도 코드+출력 쌍 경계에서 자른다). 그래도 생기는 짧은 출력 조각은 앞 청크에 합친다.
 6. **코드 청크 embedding_text** = 제목 경로 + 코드 앞 설명 문장 + 코드(출력 포함). 설명 문장이 없거나 짧아 검색이 안 되면(평가로 확인) Gemini로 "이 코드가 하는 일" 한두 문장을 만들어 추가한다(LLM 생성문은 raw_text·clean_text에 넣지 않고 embedding_text에만, 출처 표시).
-7. 표(팀 텍스트에서 한 줄로 이어진 표)가 페이지를 넘는 경우도 같은 판단·예외를 적용할지는 표 청킹 방식(다음 작업 2번 표·수식 뭉침) 결정 때 함께 정한다.
+7. 표(팀 텍스트에서 한 줄로 이어진 표)가 페이지를 넘는 경우도 같은 판단·예외를 적용할지는 표 청킹 방식(데이터 확정 후 청킹 보완의 표·수식 뭉침) 결정 때 함께 정한다.
 
 ### 시각자료 crop 파이프라인 (설계, 2026-09-30, D-016)
 대상 유형(3과목에서 확인): 테두리 없는 선 그래프 세트(226쪽 λ 그래프 3개), 도식(227쪽 라쏘/릿지), 색 머리행 비교표(227쪽), 표 틀 안의 산점도 복합 그림(228쪽). 캡션은 그림 **아래**에 `<...>` 형태로 있고 팀 텍스트 3과목에 36개, 꺾쇠 없는 캡션도 있다(228쪽 "상관분석").
@@ -186,6 +186,9 @@ adsp-study-rag/
   - 인용 검증: cited·본문 [n] 중 1..K 밖 번호는 제거하고 `citation_check`(invalid_cited, invalid_inline, inline_not_in_cited)에 기록. `[1, 2]` 형식도 인식. explanation·confusions의 인용 없는 문장 수도 기록(uncited_sentences, uncited_sentence_count — 기록만, 답을 고치지는 않음).
 - 기록: 팀 규격 `query_logs` 1행(question_text, retrieved_theory_ids=넘긴 근거 청크 id, answer=답+설명+구분, latency_ms, token_usage=Gemini usageMetadata, metadata={zone, zone_reason, status, scores, confidence, timings_ms(embed/vector/rerank/judge/llm/total), evidence(n·chunk_id·쪽·점수·cited), cited, citation_check, model, failed_attempts, …}). **컬럼 추가 없음**(metadata JSONB 사용). mingyu_app.solutions/solution_evidence 상세 저장은 아직 안 함.
 - 샘플 실행: `python -m app.qa.sample_run --ids c06,c09,...`(서버 실행 중, 한 번에 최대 12문항) → `data/reports/answers/{시각}.json/.md`
+- 답변 온도 `ANSWER_TEMPERATURE`=0(비교 실험용 고정, D-025 추가).
+- 객관식(2026-10-01, D-027): 별도 분기 없이 프롬프트 규칙 8로 처리한다. 보기별로 근거와 대조하고, 부정형은 1순위로 근거와 어긋나는 보기, 2순위로 근거에 없는 보기가 하나뿐일 때 그 보기를 고른다. answer는 "정답은 ③이다 [n]." 한 문장, explanation은 보기마다 한 줄이다. 인용 검사에서 "③은 근거에서 확인되지 않는다." 줄은 `unsupported_option_sentences`로 따로 센다.
+- 기출 확인 `python -m app.qa.mcq_run`: run(자동 채점: 답의 번호 ↔ 정답, 거절·번호 못 뽑음은 "검토 필요") → report(수동 채점 `{시각}.grades.json`이 자동보다 우선, 과목별 요약·비교용 표·답변 전문) → compare(여러 실행 + 기준선, 실행 간 바뀜·기준선 대비) → `data/reports/mcq/`
 
 ### "확인 불가" 2단계 판단 (2026-09-30, 값은 33문항 기준 잠정값 — D-024)
 - 1단계(거름망): **임베딩 1위 점수**가 아주 낮으면 리랭커·LLM 호출 없이 바로 "자료에서 확인 불가". 이 값은 자료에 없는 질문을 다 거르려는 용도가 아니라, 확실히 먼 질문만 싸게 끊는 용도라 낮게 잡는다.

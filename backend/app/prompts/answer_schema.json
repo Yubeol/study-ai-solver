@@ -3,15 +3,15 @@
   "properties": {
     "unanswerable": {
       "type": "boolean",
-      "description": "근거에 질문의 답이 없으면 true(추측 금지)"
+      "description": "근거에 질문의 답이 없으면 true(추측 금지). 객관식은 규칙 8: 보기를 하나로 정할 수 없을 때만 true"
     },
     "answer": {
       "type": "string",
-      "description": "핵심 답 1~2문장(\"~다\"체, 문장 끝에 [번호] 인용). unanswerable이면 \"자료에서 확인 불가\""
+      "description": "핵심 답 1~2문장(\"~다\"체, 문장 끝에 [번호] 인용). unanswerable이면 \"자료에서 확인 불가\". 객관식이면 \"정답은 ③이다 [n].\" 한 문장"
     },
     "explanation": {
       "type": "string",
-      "description": "근거에 기반한 설명. 모든 문장 끝에 [번호] 인용, 근거 문장 하나당 한 문장, \"~다\"체. unanswerable이면 근거에 무엇이 있고 없는지 한 문장"
+      "description": "근거에 기반한 설명. 모든 문장 끝에 [번호] 인용, 근거 문장 하나당 한 문장, \"~다\"체. unanswerable이면 근거에 무엇이 있고 없는지 한 문장. 객관식이면 보기마다 한 줄(\"①은 ~이므로 적절하다 [n].\", 근거가 없으면 \"③은 근거에서 확인되지 않는다.\")"
     },
     "confusions": {
       "type": "string",

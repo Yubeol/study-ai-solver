@@ -43,7 +43,8 @@ class Settings(BaseSettings):
 
     # 질의 답변 (ARCHITECTURE "질의 흐름"). 프롬프트는 backend/app/prompts/answer_*.txt
     answer_model: Literal["lite", "strong"] = "lite"  # strong이 재시도 후에도 실패하면 lite로 폴백(D-010)
-    answer_temperature: float = Field(default=0.2, ge=0, le=2)
+    # 0 고정(2026-10-01): 실행 간 흔들림을 줄여 비교 가능하게. 0이어도 완전 결정적이라는 보장은 없음(D-025)
+    answer_temperature: float = Field(default=0, ge=0, le=2)
     # 서버 시작 시 임베딩·리랭커를 로드하고 한 번 돌려 둔다(첫 질문 지연 방지). false면 질의 API가 503(지연 로딩 안 함).
     # 테스트(conftest)에서만 false로 둔다.
     preload_models: bool = True
