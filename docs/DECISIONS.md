@@ -275,3 +275,14 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 모순이면 답을 거절로 바꾸지 않고 "근거 확신 낮음" + `metadata.mcq_check`(negative, chosen, option_verdicts, consistent, reasons).
   - 저장된 결과 재검사(`mcq_run check`, Gemini 호출 없음): 20261001-183237·183551 두 실행 모두 **p84-1만 걸림**(정답 번호와 같지만 수동 채점 "답이 모호함"인 문제). 나머지 답변 12개는 통과, 거절 2개는 검사 대상 아님.
   - 범위 밖: 판정 이유와 결론이 맞지 않는 줄(예: p99-1 ④ "근거에 없으므로 적절하다")은 보지 않는다(규칙 추가 안 함).
+- **판정기 켜기(2026-10-01, 사용자 결정)**: `.env`를 `JUDGE_PROVIDER=jev_typesafe`로 바꿨다(`.env.example`은 키 없이도 동작하도록 none 유지). 이유: 실제 호출 c06·c09·n08 3건 모두 예상과 일치, 판정기 시간 약 0.2초(/qa 전체의 3~4%), 오류 시 none과 같은 동작(답변 + 확신 낮음), 임계값 0.5/0.8은 재적재 후 다시 잡을 잠정값이라 켜 둔 채 `metadata.judge.probability`를 모은다. 켠 뒤 화면 확인(2026-10-01): c06 확률 0.93(232ms) → 답변·확신 높음·247쪽 인용, n08 0.05(226ms) → 확인 불가.
+
+## D-029 최소 공부 화면: Vite 8 + React 19 + TypeScript, 개발 서버 프록시, 검색 대상 선택은 컴포넌트 하나로 분리 (2026-10-01)
+- 버전(2026-10-01 확인): create-vite 9.2.1(`npm create vite@9.2.1 . -- --template react-ts`), vite 8.3.2, react 19.3.0, typescript 6.0.3, @vitejs/plugin-react 6.1.x, 린트는 템플릿 기본 oxlint. Vite 요구 Node 20.19+ / 22.12+ → 설치된 Node 24.19.0(npm 11.17.0)으로 충족. 출처: https://vite.dev/guide/ , `npm view vite version`·`npm view vite engines`(npm 레지스트리). 추가 라이브러리(라우터·UI 키트) 없음.
+- CORS: 백엔드는 고치지 않고 Vite 개발 서버 프록시로 `/qa`, `/subjects`를 넘긴다. 백엔드 주소는 `frontend/.env`의 `VITE_API_TARGET`(기본 http://127.0.0.1:8000). 배포·빌드 결과 서빙 방식은 화면 전체 구성을 팀과 정할 때 다시 본다.
+- 범위: "질문 입력 → 답변과 근거 표시" 한 화면만. 상단바·사이드바·업로드 탭은 팀과 정한 뒤.
+- 검색 대상 선택: `SourceSelector`(value/onChange만 노출)로 분리. 지금은 과목 목록(`GET /subjects`)이지만 `/qa`에 과목 필터가 없어 **선택값을 보내지 않는다**(사용자 승인, 화면에 "현재 검색은 전체 자료 대상" 표시). 나중에 "업로드한 자료(문서) 선택"으로 이 파일만 바꾼다.
+- 오류 표시: 백엔드가 꺼져 있으면 Vite 프록시가 본문 없는 502를 돌려준다(2026-10-01 확인) → JSON 없는 5xx나 fetch 실패는 "서버에 연결할 수 없습니다(백엔드 실행 확인)". `VITE_QA_TIMEOUT_SECONDS`(60초)를 넘기면 요청을 끊고 "응답 시간이 초과됐습니다". 처리 중 질문 버튼 비활성화 + 경과 초 표시. 백엔드 503 등 JSON detail이 있으면 그 문구를 보여 준다.
+- 표시 규칙(내용은 바꾸지 않고 나누기만): 본문 [n]은 근거 카드 링크. 객관식(`mcq_check` 있음)이면 answer("정답은 ③이다")를 강조 상자로, explanation은 백엔드 `option_lines`와 같은 규칙(글 처음·줄바꿈·".", "]", "다" 뒤의 "①은")으로 보기 줄을 나눠 판정(option_verdicts)과 함께 표시, 고른 번호 줄 강조. 확신 낮음 이유 코드는 사람이 읽는 문구로(`ConfidenceNotice.tsx`), mcq_inconsistent면 `mcq_check.reasons`도 나열. 근거는 인용된 것만 펼치고(raw_text 원문, 책·쪽·제목 경로) 나머지는 접기. 개발 확인용 `DevInfo`(구간·점수·판정기 확률·시간·query_log_id)는 작은 회색 글씨.
+- 알게 된 것: `/qa` 응답의 `evidence[].page`는 문자열이다(printed_page_number) → 타입은 string | number.
+

@@ -22,11 +22,12 @@ adsp-study-rag/
 │   │   └── prompts/       # LLM 프롬프트 텍스트(answer_system/answer_user/answer_evidence_item.txt, answer_schema.json), 판정기 질문(judge_can_answer.json)
 │   ├── migrations/   # 번호 붙은 SQL 파일 (DDL 변경 이력)
 │   └── tests/        # DB 테스트는 접속 불가 시 skip
-├── frontend/         # React + Vite, 개인 프론트 (미생성, 공용 프론트 없음 D-021)
+├── frontend/         # React + Vite + TS, 개인 프론트(D-021, D-029). src/api.ts(API·타입), src/text.ts(보기 줄 나누기), src/components/(SourceSelector·QuestionForm·AnswerView·ConfidenceNotice·CitationList·CitedText·DevInfo)
 ├── docs/
 └── data/             # 로컬 이미지/산출물 (gitignore)
 ```
 - 실행: `cd backend; uv run uvicorn app.main:app --reload` → `/health`, `/health/db`, `/docs`
+- 화면: `cd frontend; npm run dev` → http://localhost:5173 (개발 서버 프록시가 `/qa`, `/subjects`를 백엔드로 넘김, D-029)
 
 ## API (현재)
 - `GET /subjects`: books.subject 고유값
@@ -234,7 +235,7 @@ adsp-study-rag/
 ## 판정기 (교체 가능 모듈)
 - 인터페이스: `can_answer`(근거로 답 가능?), `classify`(단원·유형 선택), `choose`(객관식 후보), `verify`(답이 근거와 일치?)
   - 오답노트용 추가(설계): `reason_match`(내 이유가 근거와 일치?, 예/아니오 + 신뢰도), `error_type`(틀린 유형 선택: concept_confusion / misread / calculation / memorization)
-- 구현체: `jev_typesafe`(구현 2026-10-01, can_answer만 — `app/judge/jev.py`, D-028), `jev_cloudflare`, `llm`(Gemini 구조화 출력), `none`(판정 생략)
+- 구현체: `jev_typesafe`(구현 2026-10-01, can_answer만 — `app/judge/jev.py`, D-028, **`.env`에서 켜 둠** 2026-10-01), `jev_cloudflare`, `llm`(Gemini 구조화 출력), `none`(판정 생략)
 - 판정 기록은 지금 `query_logs.metadata.judge`에만 남긴다. `mingyu_app.judgments`는 query_logs 연결 컬럼이 없어 solutions 저장(화면 단계)부터 solution_id로 연결해 쓴다(D-028).
 - `JUDGE_PROVIDER`로 선택. 신뢰도 임계값은 제공자별로 따로 둔다.
 - `none`일 때 오답노트는 LLM 설명만 저장하고 틀린 유형은 LLM 구조화 출력 값(또는 비워 둠)을 쓴다. 판정 없이도 흐름은 끝까지 간다.
@@ -284,4 +285,5 @@ adsp-study-rag/
 ## 화면 (React + Vite, 개인 프론트 — D-021)
 - A. 자료 업로드: 과목 선택/생성, 자료 유형, 다중 업로드, 처리 상태
 - B. 공부: 과목, 질문 또는 문제 사진, 제약 프리셋, 답변 + 근거 청크 + 출처(출처 유형: 교재/사용자 보충/수정본, 시각자료 근거는 원본 crop 이미지 + 설명문). "확인 불가"면 이론 보충 입력. 답변 피드백. 오답 입력(내 답·내 이유) 모드, 오답노트 목록·재질문
+- **구현 상태(2026-10-01, D-029)**: B의 "질문 입력 → 답변과 근거 표시" 한 화면만. 검색 대상 선택(`SourceSelector`, 지금은 과목, 선택값은 `/qa`에 안 보냄), 객관식 정답·보기별 판단 줄 구분, 확신 낮음 이유 문구, 근거 원문 카드, 개발 정보(판정기 확률 등). 상단바·사이드바·탭·피드백·검수는 아직 없음
 - C. 관리: 과목·자료 목록, 삭제/재임베딩, 사용 로그, 검수 탭(v_review_queue 기반 + needs_review 청크, 위 "품질 검수 도구" 2단계, 답변 피드백, 보충·수정 목록 삭제·복구)

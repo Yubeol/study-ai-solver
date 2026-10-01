@@ -56,6 +56,11 @@
 | 기출 객관식으로 답변 확인 | `.env` / `data/eval/mcq_selection.json` | `MCQ_SELECTION_PATH`(실행할 문제 key 목록, `selected` 배열), `MCQ_REQUEST_INTERVAL_SECONDS`(6, 요청 간격), `MCQ_MAX_QUESTIONS`(20). 순서: `cd backend; uv run python -m app.qa.mcq_run extract`(기출 블록 파싱 → `data/reports/mcq/candidates.md`에서 key 확인) → 선택 파일 수정 → 서버 켠 상태에서 `uv run python -m app.qa.mcq_run run`(자동 채점: 답의 "정답은 ③" 번호와 정답 대조, 거절·번호 못 뽑음은 "검토 필요") → 검토 필요 문제만 답변을 읽고 `{시각}.grades.json` 작성(verdict: 맞음/틀림/확인 불가/답이 모호함, cause: 검색 실패/LLM 판단 오류/정제 문제/시각자료 필요/기타, **note에 이유**) → `uv run python -m app.qa.mcq_run report {시각}.json --grades {시각}.grades.json [--baseline 이전.grades.json]` → 여러 실행 비교 `uv run python -m app.qa.mcq_run compare A.json B.json --baseline 이전.json` | `data/reports/mcq/{시각}.md`(과목별 정답률·틀림·비교용 표·문제별 답변 전문), `compare-{시각}.md`(실행 간 바뀐 문제) |
 | 객관식 풀이 규칙(보기별 판단, 부정형 고르는 순서, "정답은 ③이다" 형식) | `backend/app/prompts/answer_system.txt` | 규칙 8(D-027). 형식 문구("근거에서 확인되지 않는다")를 바꾸면 `app/qa/service.py`의 `_UNSUPPORTED_OPTION`도 같이 고침(인용 검사 예외), "정답은 X" 형식을 바꾸면 `app/qa/mcq_run.py`의 `_CHOICE_HEAD`(자동 채점) | `uv run pytest backend/tests/test_qa.py backend/tests/test_mcq_run.py` → `mcq_run run` 2회 + `compare` |
 | DB 구조(컬럼·테이블 추가) | `backend/migrations/` | 새 번호 파일(`003_...sql`) 추가. 적용된 파일은 수정 금지, 팀 규격 컬럼은 추가만 | `cd backend; uv run python -m app.db.migrate --dry-run` → 사용자 확인 → `uv run python -m app.db.migrate` |
+| 화면이 호출할 백엔드 주소 | `frontend/.env` (`frontend/.env.example` 복사) | `VITE_API_TARGET` (기본 http://127.0.0.1:8000) | `npm run dev` 재시작 후 화면에서 과목 목록이 뜨는지 |
+| 화면의 질문 응답 대기 한도 | `frontend/.env` | `VITE_QA_TIMEOUT_SECONDS` (기본 60초, 넘으면 "응답 시간이 초과됐습니다") | `npm run dev` 재시작 |
+| 화면의 "근거 확신 낮음" 이유 문구 | `frontend/src/components/ConfidenceNotice.tsx` | `REASON_TEXT` (이유 코드 → 문구) | 화면에서 확신 낮음 답변 |
+| 화면 색·글자 크기 | `frontend/src/index.css` | `:root`의 색 변수, 각 클래스 | 화면 새로고침 |
+| 검색 대상 선택(과목 → 업로드한 자료) | `frontend/src/components/SourceSelector.tsx` | value/onChange는 그대로 두고 안쪽만 교체. 선택값을 서버에 보내려면 `/qa`에 필터 추가가 먼저 필요 | 화면 |
 
 ## 2. 아직 없는 기능 (구현하면 채운다)
 
