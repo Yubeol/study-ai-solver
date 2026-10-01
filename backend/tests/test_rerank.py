@@ -72,13 +72,27 @@ def test_score_results_without_reranker_has_no_rerank_summary():
     assert "rerank_thresholds" not in summarize(res, k=5, thresholds=[0.5])
 
 
-def test_is_answerable_two_stages(settings):
-    s = settings.model_copy(update={"answerable_min_vector_score": 0.45, "answerable_min_rerank_score": 0.3})
-    assert is_answerable(s, None, None) == (False, "no_result")
-    assert is_answerable(s, 0.40, 0.9) == (False, "vector_below_floor")
-    assert is_answerable(s, 0.60, 0.1) == (False, "rerank_below_threshold")
-    assert is_answerable(s, 0.60, 0.5) == (True, "ok")
-    assert is_answerable(s, 0.60, None) == (True, "ok")  # 리랭커 없으면 1단계만
+def test_is_answerable_three_zones(settings):
+    s = settings.model_copy(update={
+        "answerable_min_vector_score": 0.45, "answerable_min_rerank_score": 0.03, "answerable_confident_rerank_score": 0.15,
+    })
+    assert is_answerable(s, None, None) == ("reject", "no_result")
+    assert is_answerable(s, 0.40, 0.9) == ("reject", "vector_below_floor")
+    assert is_answerable(s, 0.60, 0.01) == ("reject", "rerank_below_floor")
+    assert is_answerable(s, 0.60, 0.03) == ("gray", "rerank_gray")  # 하한 이상
+    assert is_answerable(s, 0.60, 0.10) == ("gray", "rerank_gray")
+    assert is_answerable(s, 0.60, 0.15) == ("answer", "ok")  # 상한 이상
+    assert is_answerable(s, 0.60, None) == ("answer", "no_reranker")  # 리랭커 없으면 1단계만
+
+
+def test_rerank_zone_bounds_must_be_ordered(settings):
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    data = settings.model_dump() | {"answerable_min_rerank_score": 0.2, "answerable_confident_rerank_score": 0.1}
+    with pytest.raises(ValidationError):
+        Settings.model_validate(data)
 
 
 @pytest.mark.reranker_model

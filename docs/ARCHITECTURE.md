@@ -155,10 +155,10 @@ adsp-study-rag/
 - 1단계(거름망): **임베딩 1위 점수**가 아주 낮으면 리랭커·LLM 호출 없이 바로 "자료에서 확인 불가". 이 값은 자료에 없는 질문을 다 거르려는 용도가 아니라, 확실히 먼 질문만 싸게 끊는 용도라 낮게 잡는다.
 - 2단계(겹치는 구간): 1단계를 통과한 질문은 **리랭커 점수** 또는 **판정기 can_answer**로 답할 수 있는지 판단한다. 판정기는 교체 가능 모듈이므로 `JUDGE_PROVIDER=none`이면 리랭커 점수만으로 판단한다.
 - 근거: 33문항 평가(2026-09-30)에서 임베딩 1위 점수가 답할 수 있는 질문 0.516~0.709, 자료에 없는 질문 0.419~0.608로 0.52~0.61에서 겹쳐 점수 하나로는 못 가른다(특히 교재 인접 주제 경계 사례).
-- 값(D-024): 1단계 `ANSWERABLE_MIN_VECTOR_SCORE`=0.45, 2단계 `ANSWERABLE_MIN_RERANK_SCORE`=0.15(`BAAI/bge-reranker-v2-m3` sigmoid 점수). 판단 함수는 `app/retrieval/search.py`의 `is_answerable(settings, 벡터 1위, 리랭커 1위)` → (답변 시도 여부, 이유 `no_result`/`vector_below_floor`/`rerank_below_threshold`/`ok`). 리랭커가 없으면 1단계만.
+- (2026-09-30 첫 구현은 2단계: 리랭커 0.15 미만이면 확인 불가. 2026-10-01 아래 3구간으로 교체)
 - 알려진 대가: 정답이 1위여도 표·수식이 뭉친 청크는 리랭커 점수가 낮아 "확인 불가"가 될 수 있다(c06, c09). → 아래 3구간 설계로 바꾼다.
 
-#### "확인 불가" 3구간 (설계 2026-09-30, 구현은 1-b 질의 흐름·1-c 판정기에서 — D-024 보완)
+#### "확인 불가" 3구간 (설계 2026-09-30, 구현 2026-10-01 — D-024 보완. 판정기 연결은 1-c)
 - 1단계 벡터 하한(`ANSWERABLE_MIN_VECTOR_SCORE`=0.45)은 그대로 두고, 통과한 질문을 **리랭커 1위 점수**로 3구간에 나눈다.
   | 리랭커 1위 점수 | 처리 |
   |---|---|
@@ -166,8 +166,8 @@ adsp-study-rag/
   | 하한 ~ 상한(잠정 **0.15**) 미만 | **회색 구간** → 판정기 can_answer로 판단. `JUDGE_PROVIDER=none`이면 답변하되 "근거 확신 낮음" 표시 |
   | ≥ 상한 | 그대로 답변 |
 - 근거(33문항, v2-m3 N=10): 자료에 없는 질문은 n08(0.131, 경계 사례) 외 모두 0.005 이하, 답할 수 있는 질문 최저 0.043(c06)·0.066(c09). 2단계(0.15 하나)로 자르면 c06·c09처럼 **교재에 있는 걸 없다고 하는** 일이 생기므로, 그 구간을 판정기·확신 낮음 표시로 넘긴다. 결과 예상: 하한 미만 = 자료 없음 6/7, 회색 = c06·c09·n08, 상한 이상 = 답 가능 24/26.
-- 두 값은 `.env` 설정값이고 **33문항 기준 잠정값**이다. 설정 이름(구현 시 확정): 하한 `ANSWERABLE_MIN_RERANK_SCORE`(현재 0.15 → 0.03으로 변경), 상한 새 값(예: `ANSWERABLE_CONFIDENT_RERANK_SCORE`=0.15). `is_answerable`은 (구간 `reject`/`gray`/`answer`, 이유)를 돌려주도록 바꾼다.
-- 현재 코드는 아직 2단계(리랭커 0.15 미만이면 확인 불가)다.
+- 설정(`.env`, **33문항 기준 잠정값**): 하한 `ANSWERABLE_MIN_RERANK_SCORE`=0.03, 상한 `ANSWERABLE_CONFIDENT_RERANK_SCORE`=0.15(하한 ≤ 상한 검사). 벡터 하한 `ANSWERABLE_MIN_VECTOR_SCORE`=0.45.
+- 판단 함수: `app/retrieval/search.py`의 `is_answerable(settings, 벡터 1위, 리랭커 1위)` → (구간, 이유). `reject`(`no_result`/`vector_below_floor`/`rerank_below_floor`), `gray`(`rerank_gray`), `answer`(`ok`, 리랭커가 없으면 `no_reranker`).
 
 ### 검색 단계 상세 (리랭커 구현 2026-09-30, 키워드 검색은 미검증)
 - 현재 구현: 벡터 후보 `SEARCH_CANDIDATES_N`(10)개(`app/retrieval/search.py`의 `search_theory`, v_searchable_theory, cosine) → 리랭커(`app/retrieval/rerank.py`, `RERANKER_MODEL`=`BAAI/bge-reranker-v2-m3`, CrossEncoder + sigmoid, 입력 `RERANKER_INPUT`=embedding_text) → 상위 `SEARCH_TOP_K`(5)개. 리랭크 결과 행에는 `vector_rank`·`vector_score`·`rerank_score`가 붙는다. `RERANKER_MODEL`이 비면 벡터 순위 그대로. 모델은 프로세스당 1개(임베딩과 같은 HF_HOME 캐시), CPU에서 질문당 평균 6초(D-024).

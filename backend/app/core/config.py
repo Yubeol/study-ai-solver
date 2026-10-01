@@ -57,10 +57,12 @@ class Settings(BaseSettings):
     reranker_device: str = "cpu"
     reranker_input: Literal["embedding_text", "clean_text"] = "embedding_text"  # 청크 쪽 입력 텍스트
 
-    # "확인 불가" 2단계 판단 (ARCHITECTURE). 1단계: 벡터 1위 점수 < 하한이면 바로 확인 불가.
-    # 2단계: 리랭커 1위 점수 < 임계값이면 확인 불가(리랭커가 없으면 2단계 생략). 값은 33문항 기준 잠정값(D-024)
+    # "확인 불가" 판단 (ARCHITECTURE "확인 불가" 3구간). 1단계: 벡터 1위 점수 < 하한이면 바로 확인 불가.
+    # 2단계(리랭커 1위 점수): < 하한 → 확인 불가(reject) / 하한~상한 → 회색(gray) / ≥ 상한 → 답변(answer).
+    # 리랭커가 없으면 2단계 생략. 값은 33문항 기준 잠정값(D-024)
     answerable_min_vector_score: float = Field(default=0.45, ge=0, le=1)
-    answerable_min_rerank_score: float = Field(default=0.15, ge=0, le=1)
+    answerable_min_rerank_score: float = Field(default=0.03, ge=0, le=1)
+    answerable_confident_rerank_score: float = Field(default=0.15, ge=0, le=1)
 
     # 검색 평가 (ARCHITECTURE "검색 평가")
     eval_questions_path: Path = Field(default=Path("data/eval/questions.csv"))  # 상대경로면 저장소 루트 기준
@@ -128,6 +130,12 @@ class Settings(BaseSettings):
         # 검출 모델 이름만 주면 PaddleOCR가 lang을 무시하고 비한국어 인식 모델을 올린다(D-013).
         if self.ocr_det_model and not self.ocr_rec_model:
             raise ValueError("OCR_DET_MODEL을 지정하면 OCR_REC_MODEL도 지정해야 합니다.")
+        return self
+
+    @model_validator(mode="after")
+    def _check_rerank_zones(self):
+        if self.answerable_min_rerank_score > self.answerable_confident_rerank_score:
+            raise ValueError("ANSWERABLE_MIN_RERANK_SCORE는 ANSWERABLE_CONFIDENT_RERANK_SCORE 이하여야 합니다.")
         return self
 
     @property
