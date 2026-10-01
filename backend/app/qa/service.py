@@ -29,7 +29,10 @@ log = logging.getLogger(__name__)
 
 UNANSWERABLE_TEXT = "자료에서 확인 불가"
 LLM_ERROR_TEXT = "답변 생성 실패(잠시 후 다시 시도)"
-_INLINE_CITE = re.compile(r"\[(\d+)\]")
+_INLINE_CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")  # [1], [1, 2]
+# 문장 경계: 마침표·물음표·느낌표 뒤 공백(바로 뒤가 인용 "[n]"이면 같은 문장으로 본다) 또는 줄바꿈
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?!\[)|\n+")
+CITATION_REQUIRED_FIELDS = ("explanation", "confusions")  # 모든 문장에 [n] 인용이 있어야 하는 필드
 
 
 @dataclass
@@ -86,7 +89,11 @@ def evidence_prompt(evidence: list[dict]) -> str:
 
 
 def validate_citations(data: dict, n_evidence: int) -> tuple[list[int], dict]:
-    """(유효한 cited, 기록). 범위 밖 번호는 cited와 본문 [n]에서 지운다(data를 고침)."""
+    """(유효한 cited, 기록). 범위 밖 번호는 cited와 본문 [n]에서 지운다(data를 고침).
+
+    기록: invalid_cited, invalid_inline, inline_not_in_cited, uncited_sentences(필드별 인용 없는 문장 수),
+    uncited_sentence_count(explanation·confusions 합계).
+    """
     valid_range = range(1, n_evidence + 1)
     cited, invalid = [], []
     for c in data.get("cited") or []:
@@ -98,21 +105,33 @@ def validate_citations(data: dict, n_evidence: int) -> tuple[list[int], dict]:
     inline_invalid = []
 
     def strip(m: re.Match) -> str:
-        if int(m.group(1)) in valid_range:
+        nums = [int(x) for x in m.group(1).split(",")]
+        keep = [x for x in nums if x in valid_range]
+        inline_invalid.extend(x for x in nums if x not in valid_range)
+        if len(keep) == len(nums):
             return m.group(0)
-        inline_invalid.append(int(m.group(1)))
-        return ""
+        return f"[{', '.join(map(str, keep))}]" if keep else ""
 
     for key in ("answer", "explanation", "confusions"):
         if isinstance(data.get(key), str):
             data[key] = _INLINE_CITE.sub(strip, data[key])
     # 본문에서 인용했는데 cited에 빠진 유효 번호는 기록만 한다(cited는 LLM이 낸 목록 기준).
-    inline_valid = {int(x) for k in ("answer", "explanation", "confusions") for x in _INLINE_CITE.findall(data.get(k) or "")}
+    inline_valid = {int(x) for k in ("answer", "explanation", "confusions")
+                    for g in _INLINE_CITE.findall(data.get(k) or "") for x in g.split(",")}
+    uncited = {k: count_uncited_sentences(data.get(k) or "") for k in CITATION_REQUIRED_FIELDS}
     return cited, {
         "invalid_cited": invalid,
         "invalid_inline": inline_invalid,
         "inline_not_in_cited": sorted(inline_valid - set(cited)),
+        "uncited_sentences": uncited,
+        "uncited_sentence_count": sum(uncited.values()),
     }
+
+
+def count_uncited_sentences(text: str) -> int:
+    """[n] 인용이 하나도 없는 문장 수. 글자가 없는 조각(목록 기호 등)은 세지 않는다."""
+    return sum(1 for s in _SENTENCE_SPLIT.split(text)
+               if re.search(r"[가-힣A-Za-z]", s) and not _INLINE_CITE.search(s))
 
 
 def answer_question(conn: psycopg.Connection, settings: Settings, models: QaModels, question: str,

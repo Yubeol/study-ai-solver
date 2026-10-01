@@ -7,21 +7,29 @@
     },
     "answer": {
       "type": "string",
-      "description": "핵심 답 1~2문장. unanswerable이면 \"자료에서 확인 불가\""
+      "description": "핵심 답 1~2문장(\"~다\"체, 문장 끝에 [번호] 인용). unanswerable이면 \"자료에서 확인 불가\""
     },
     "explanation": {
       "type": "string",
-      "description": "근거에 기반한 설명(문장 끝에 [번호] 인용). unanswerable이면 근거에 무엇이 있고 없는지 한 문장"
+      "description": "근거에 기반한 설명. 모든 문장 끝에 [번호] 인용, 근거 문장 하나당 한 문장, \"~다\"체. unanswerable이면 근거에 무엇이 있고 없는지 한 문장"
     },
     "confusions": {
       "type": "string",
-      "description": "근거 안에 있는 헷갈리기 쉬운 개념과의 차이. 근거에 없으면 빈 문자열"
+      "description": "근거 안에 있는 헷갈리기 쉬운 개념과의 차이. 모든 문장 끝에 [번호] 인용, \"~다\"체. 근거에 없으면 빈 문자열"
     },
     "cited": {
       "type": "array",
-      "items": {"type": "integer"},
+      "items": {
+        "type": "integer"
+      },
       "description": "답에 실제로 사용한 근거 번호 목록. unanswerable이면 빈 배열"
     }
   },
-  "required": ["unanswerable", "answer", "explanation", "confusions", "cited"]
+  "required": [
+    "unanswerable",
+    "answer",
+    "explanation",
+    "confusions",
+    "cited"
+  ]
 }

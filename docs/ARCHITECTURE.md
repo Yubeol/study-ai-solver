@@ -183,7 +183,7 @@ adsp-study-rag/
   - LLM 입력: 근거마다 `[n] 과목(책 제목) / 교재 쪽 / 제목 경로` + clean_text. 응답의 근거 표시는 raw_text(교재 원문).
   - 시험형 형식: answer(핵심 1~2문장) → explanation(근거 기반 설명, [n] 인용) → confusions(근거 안의 헷갈리는 개념, 없으면 빈 값)
   - LLM이 unanswerable=true면 "자료에서 확인 불가"(3구간 뒤 한 겹 더). 유효 인용이 하나도 없으면 low_confidence.
-  - 인용 검증: cited·본문 [n] 중 1..K 밖 번호는 제거하고 `citation_check`(invalid_cited, invalid_inline, inline_not_in_cited)에 기록.
+  - 인용 검증: cited·본문 [n] 중 1..K 밖 번호는 제거하고 `citation_check`(invalid_cited, invalid_inline, inline_not_in_cited)에 기록. `[1, 2]` 형식도 인식. explanation·confusions의 인용 없는 문장 수도 기록(uncited_sentences, uncited_sentence_count — 기록만, 답을 고치지는 않음).
 - 기록: 팀 규격 `query_logs` 1행(question_text, retrieved_theory_ids=넘긴 근거 청크 id, answer=답+설명+구분, latency_ms, token_usage=Gemini usageMetadata, metadata={zone, zone_reason, status, scores, confidence, timings_ms(embed/vector/rerank/judge/llm/total), evidence(n·chunk_id·쪽·점수·cited), cited, citation_check, model, failed_attempts, …}). **컬럼 추가 없음**(metadata JSONB 사용). mingyu_app.solutions/solution_evidence 상세 저장은 아직 안 함.
 - 샘플 실행: `python -m app.qa.sample_run --ids c06,c09,...`(서버 실행 중, 한 번에 최대 12문항) → `data/reports/answers/{시각}.json/.md`
 

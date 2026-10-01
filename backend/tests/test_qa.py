@@ -12,7 +12,7 @@ from pydantic import SecretStr
 
 from app.llm.gemini import GeminiClient, GeminiError, JsonResult
 from app.qa import service
-from app.qa.service import QaModels, answer_question, heading_path, validate_citations
+from app.qa.service import QaModels, answer_question, count_uncited_sentences, heading_path, validate_citations
 
 
 class FakeEmbedder:
@@ -89,6 +89,24 @@ def test_validate_citations_removes_out_of_range():
     assert check["invalid_cited"] == [7, 0, "1", True]
     assert check["invalid_inline"] == [9] and data["answer"] == "답 [2]"
     assert check["inline_not_in_cited"] == [1]
+
+
+def test_validate_citations_multi_number_brackets():
+    data = {"cited": [1], "answer": "답 [1, 9]", "explanation": "가 [2, 3].", "confusions": ""}
+    _, check = validate_citations(data, 2)
+    assert data["answer"] == "답 [1]" and data["explanation"] == "가 [2]."
+    assert check["invalid_inline"] == [9, 3] and check["inline_not_in_cited"] == [2]
+
+
+def test_uncited_sentence_count():
+    data = {"cited": [1], "answer": "답이다.",
+            "explanation": "가는 나다 [1]. 다는 라다. 마는 바다. [2]\n- 사는 아다",
+            "confusions": "자는 차다 [1], [2]."}
+    _, check = validate_citations(data, 2)
+    # "다는 라다."와 "- 사는 아다"가 인용 없음. "마는 바다. [2]"는 문장 뒤 인용으로 인정. answer는 세지 않음
+    assert check["uncited_sentences"] == {"explanation": 2, "confusions": 0}
+    assert check["uncited_sentence_count"] == 2
+    assert count_uncited_sentences("") == 0 and count_uncited_sentences("값은 0.5이다 [1].") == 0
 
 
 def test_reject_zone_skips_llm(monkeypatch, qa_settings, logged):
