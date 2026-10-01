@@ -16,7 +16,7 @@ adsp-study-rag/
 │   │   ├── storage/       # Storage 인터페이스, local(구현), s3(자리만), get_storage()
 │   │   ├── ingestion/     # images(업로드 검증·decode_bgr), ocr(PaddleOCR 엔진), pipeline(단계 실행·상태 갱신), stages(단계 함수), chunking(청킹 규칙), embedding(BGE-M3), team_import, run_stages
 │   │   ├── retrieval/     # search(벡터 검색·"확인 불가" 3구간), rerank(리랭커), evaluate(검색 평가), eval_report(평가 HTML 보고서)
-│   │   ├── qa/            # service(질의 흐름: 검색→3구간→답변→인용 검증→query_logs), sample_run(평가 질문 일부를 /qa로 실행)
+│   │   ├── qa/            # service(질의 흐름: 검색→3구간→답변→인용 검증→query_logs), sample_run(평가 질문 일부를 /qa로 실행), mcq_run(기출 객관식 파싱·/qa 실행·채점 요약)
 │   │   ├── llm/           # gemini(REST generateContent, JSON 구조화 출력, 재시도·폴백)
 │   │   ├── judge/         # 판정기 인터페이스(get_judge, 지금은 none만)
 │   │   └── prompts/       # LLM 프롬프트 텍스트(answer_system/answer_user/answer_evidence_item.txt, answer_schema.json)

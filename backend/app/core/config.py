@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     eval_rerank_thresholds: str = "0.01,0.05,0.1,0.15,0.2,0.3,0.5,0.7"  # 리랭커 1위 점수 임계값 후보
     eval_report_thumb_width: int = Field(default=320, gt=0)  # HTML 보고서 페이지 썸네일 가로 픽셀
     eval_report_text_chars: int = Field(default=200, gt=0)  # HTML 보고서에 보일 청크 텍스트 앞부분 글자 수
+    # 기출 객관식 답변 확인 (python -m app.qa.mcq_run)
+    mcq_selection_path: Path = Field(default=Path("data/eval/mcq_selection.json"))  # 실행할 문제 key 목록
+    mcq_request_interval_seconds: float = Field(default=6.0, ge=0)  # /qa 요청 사이 대기(Gemini 무료 한도)
+    mcq_max_questions: int = Field(default=20, gt=0)  # 한 번에 실행할 최대 문제 수
 
     # 판정기
     judge_provider: Literal["none", "jev_typesafe", "jev_cloudflare", "llm"] = "none"
@@ -163,6 +167,10 @@ class Settings(BaseSettings):
     @property
     def eval_questions_file(self) -> Path:
         return _from_root(self.eval_questions_path)
+
+    @property
+    def mcq_selection_file(self) -> Path:
+        return _from_root(self.mcq_selection_path)
 
     @property
     def eval_threshold_list(self) -> list[float]:

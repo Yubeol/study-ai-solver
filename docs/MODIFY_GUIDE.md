@@ -50,6 +50,7 @@
 | 답변 생성 세부값 | `.env` | `ANSWER_TEMPERATURE`(0.2), `GEMINI_TIMEOUT_SECONDS`(60), `GEMINI_MAX_RETRIES`(3, 429/5xx/시간 초과 시 같은 모델 재시도), `GEMINI_RETRY_BASE_SECONDS`(2, 대기 2→4→8초) | `/qa` 응답의 `llm.failed_attempts` |
 | 서버 시작 시 모델 미리 로드 | `.env` | `PRELOAD_MODELS`(true, 약 1분·RAM 약 4.6GB). false면 `/qa`가 503(테스트용) | 서버 로그 `Application startup complete` 후 `/docs`에서 `POST /qa` |
 | 질의 샘플 실행(평가 질문 일부) | 명령 | 서버를 켠 상태에서 `cd backend; uv run python -m app.qa.sample_run --ids c06,c09,n08` (한 번에 최대 12개, Gemini 무료 한도 때문에 전체 실행 금지) | `data/reports/answers/{시각}.md`(질문·판정·답변·인용 원문), DataGrip `mingyu.query_logs.metadata` |
+| 기출 객관식으로 답변 확인 | `.env` / `data/eval/mcq_selection.json` | `MCQ_SELECTION_PATH`(실행할 문제 key 목록, `selected` 배열), `MCQ_REQUEST_INTERVAL_SECONDS`(6, 요청 간격), `MCQ_MAX_QUESTIONS`(20). 순서: `cd backend; uv run python -m app.qa.mcq_run extract`(기출 블록 파싱 → `data/reports/mcq/candidates.md`에서 key 확인) → 선택 파일 수정 → 서버 켠 상태에서 `uv run python -m app.qa.mcq_run run` → 답변을 읽고 `{시각}.grades.json` 작성(verdict: 맞음/틀림/확인 불가/답이 모호함, cause: 검색 실패/LLM 판단 오류/정제 문제/시각자료 필요/기타) → `uv run python -m app.qa.mcq_run report {시각}.json --grades {시각}.grades.json [--baseline 이전.grades.json]` | `data/reports/mcq/{시각}.md`(과목별 정답률·원인·문제별 답변) |
 | DB 구조(컬럼·테이블 추가) | `backend/migrations/` | 새 번호 파일(`003_...sql`) 추가. 적용된 파일은 수정 금지, 팀 규격 컬럼은 추가만 | `cd backend; uv run python -m app.db.migrate --dry-run` → 사용자 확인 → `uv run python -m app.db.migrate` |
 
 ## 2. 아직 없는 기능 (구현하면 채운다)
