@@ -286,3 +286,16 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 표시 규칙(내용은 바꾸지 않고 나누기만): 본문 [n]은 근거 카드 링크. 객관식(`mcq_check` 있음)이면 answer("정답은 ③이다")를 강조 상자로, explanation은 백엔드 `option_lines`와 같은 규칙(글 처음·줄바꿈·".", "]", "다" 뒤의 "①은")으로 보기 줄을 나눠 판정(option_verdicts)과 함께 표시, 고른 번호 줄 강조. 확신 낮음 이유 코드는 사람이 읽는 문구로(`ConfidenceNotice.tsx`), mcq_inconsistent면 `mcq_check.reasons`도 나열. 근거는 인용된 것만 펼치고(raw_text 원문, 책·쪽·제목 경로) 나머지는 접기. 개발 확인용 `DevInfo`(구간·점수·판정기 확률·시간·query_log_id)는 작은 회색 글씨.
 - 알게 된 것: `/qa` 응답의 `evidence[].page`는 문자열이다(printed_page_number) → 타입은 string | number.
 
+
+## D-030 팀 합류 준비: 저장소는 팀 공유로, 개인 기록은 추적 해제, 서비스 스키마는 mingyu 유지 (2026-10-01, 계획만 — 실행은 다음 세션)
+- 배경: 팀원 3명(데이터·프론트·백엔드 기능)이 각자 프로젝트를 접고 이 저장소로 합류한다(D-021의 "각자 개인 프로젝트"를 대체). 협업은 기능 브랜치 → PR → main, PR마다 pytest·npm build·lint 자동 실행. 기출은 DB에 넣지 않고 이론만 근거로 쓰며, 기출 평가 세트는 평가 파일로만 둔다. 피드백 저장(solutions + judgments)은 재적재 이후로 미룬다.
+- 조사 결과(읽기 전용): 커밋 39개에 `data/`·`.env`가 들어간 적 없고, `.env` 비밀값·키 패턴의 기록 등장 0건 → 기록 재작성 없이 추적 해제만 한다. DB 접속 불가 조건에서 테스트 2개(`test_pool_connection_does_not_leak_search_path`, `test_qa_api`)가 건너뛰지 않고 실패 → CI 전에 수정. `uv.lock`에 nvidia 패키지 43개(Linux에서 CUDA torch).
+- 결정(사용자):
+  - A. 서비스 스키마는 mingyu·mingyu_app 유지. 데이터 담당 결과물은 DB가 아니라 공통 JSON 파일로 받는다. 각자 실험용 스키마는 본인만, 서비스 스키마 변경은 `backend/migrations/` 번호 파일 + PR + 팀 공지, 재적재·DDL 적용은 민규만. DB 서버는 보안 그룹으로 팀원 IP만 허용(민규가 AWS에서 설정).
+  - B. PROGRESS·sessions는 추적 해제만(기록은 이전 커밋에 남음). README에 "현재 상태" 5줄 요약, 남은 작업은 GitHub Issues(웹에서 직접 생성).
+  - C. 평가 질문 33문항은 `eval/questions.csv`로 커밋(직접 쓴 질문 + 쪽번호). 커밋 전 정답 표시가 쪽번호 기준인지 확인. 기출 원문은 커밋하지 않는다.
+  - D. CI의 torch는 정리 PR 머지 직후 별도 PR로 pytorch-cpu 인덱스 적용(확인 2026-10-01, https://docs.astral.sh/uv/guides/integration/pytorch/ — `[tool.uv.sources]` + `[[tool.uv.index]] name="pytorch-cpu" url="https://download.pytorch.org/whl/cpu" explicit=true`). `uv.lock`이 바뀌므로 Windows 로컬 재설치와 실제 모델 테스트로 확인.
+  - main 보호: 무료 비공개 저장소는 보호된 브랜치를 쓸 수 없다(사용자 확인, GitHub 문서 "About protected branches" https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches — 이 세션의 문서 조회에서는 해당 문장을 직접 찾지 못함) → README에 팀 약속 "main 직접 push 금지, PR + CI 통과 후 머지".
+- CLAUDE.md 분리: 팀 규칙은 `CLAUDE.md`(커밋), 개인 지침(세션 시작·완료 루틴, /start·/wrap, 개인 경로)은 `CLAUDE.local.md`(gitignore). 공식 문서 확인 2026-10-01: "For private per-project preferences that shouldn't be checked into version control, create a `CLAUDE.local.md` at the project root. It loads alongside `CLAUDE.md`… Add `CLAUDE.local.md` to your `.gitignore`" (https://code.claude.com/docs/en/memory).
+- CI에서는 실제 모델 테스트(addopts로 제외)와 DB 테스트(닿지 않는 가짜 DB 값 → 건너뜀)를 돌리지 않는다. 공유 DB 정보는 GitHub Secrets에 넣지 않고 DB 테스트는 PR 전 로컬에서 돌린다.
+- API 계약은 `docs/API.md`(사람이 씀) + FastAPI `/docs`·`/openapi.json`. API를 바꾸는 PR은 API.md도 같이 고친다.

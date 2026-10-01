@@ -1,6 +1,7 @@
 # PROGRESS
 
-## 현재 상태 (2026-10-01 최소 공부 화면 세션 기준)
+## 현재 상태 (2026-10-01 팀 합류 준비 조사 세션 기준 — 코드 변경 없음, 상태는 최소 공부 화면 세션과 같음)
+- **팀 합류 예정**(2026-10-01): 팀원 3명(데이터·프론트·백엔드 기능)이 이 저장소로 합류. 저장소 정리 조사·계획 완료, 실행 대기(아래 다음 작업 1번, D-030)
 - 환경·문서: 저장소(E:\자료실\adsp-study-rag), 루트 uv 환경(Python 3.12), GitHub 원격(Yubeol/study-ai-solver, private, main), CLAUDE.md, docs, /start·/wrap 명령
   - uv 캐시는 사용자 환경변수 `UV_CACHE_DIR=E:\uv-cache`(C 여유 부족). 새 터미널부터 적용
 - 외부 접근: Gemini 완료(LITE=gemini-3.5-flash-lite 확정, STRONG=gemini-3.7-flash 잠정, D-006). Jev는 TypeSafe 직접 API로 판정기 구현·실제 호출 3건 확인(D-028). Cloudflare 값은 비어 있음. S3 미확인 → STORAGE_BACKEND=local
@@ -31,12 +32,39 @@
 - 규칙 추가(CLAUDE.md): 조정 가능한 값은 `.env`/`config.py` 한 곳, LLM 프롬프트는 `backend/app/prompts/` 텍스트 파일. /wrap은 세션 설명 파일까지 작성
 
 ## 다음 작업 (2026-10-01 순서: 최소 화면. 팀 비교는 상대 데이터 준비 전까지 보류)
+
+### [다음 세션 1번: 팀 합류 준비 저장소 정리 — 조사·계획 완료, 실행 대기] (2026-10-01 조사)
+배경: 팀원 3명(데이터 1, 프론트 1, 백엔드 기능 1)이 이 저장소로 합류. 협업은 기능 브랜치 → PR → main(직접 push 금지), PR마다 pytest·npm build 자동 실행. 기출은 DB에 넣지 않고 평가 파일로만. 피드백 저장(B안)은 재적재 이후로 미룸
+- 조사 결과 요약
+  - **커밋 기록 깨끗함**(39커밋): `data/`·`.env`가 커밋된 적 없음, `.env` 비밀값(DB 주소·계정·비밀번호, Gemini·TypeSafe 키)의 기록 등장 0회, 키 패턴(AIza·비밀번호 포함 postgres URL·sk-·AKIA) 0건, 이미지·PDF·zip 없음(가장 큰 파일 uv.lock 250KB) → 기록 재작성 불필요. 테스트 fixture는 지어낸 문장, 문서에는 원문 문단 없음(장 제목·쪽번호 언급 정도, 팀 문서로 옮길 때 사람이 한 번 훑어보기)
+  - **DB 없을 때 실패하는 테스트 2개**: DB 접속 불가 조건(CI와 같음)에서 106 통과 / 19 건너뜀 / 3 제외 / **2 실패** — `test_db_schema.py::test_pool_connection_does_not_leak_search_path`, `test_qa.py::test_qa_api`(db_conn fixture 대신 커넥션 풀을 직접 써서 PoolTimeout) → DB 없으면 건너뛰게 수정 필요
+  - **추적 파일 121개 분류**: 팀 공유(그대로) = `backend/**`, `frontend/**`, `pyproject.toml`, `uv.lock`, `.python-version`, `.env.example`, `frontend/.env.example`, `.gitignore` / 팀 문서(고쳐서 유지) = ARCHITECTURE, DECISIONS, MODIFY_GUIDE, PROJECT, `docs/team/*` 2개 / 개인용(추적 해제) = `docs/PROGRESS.md`, `docs/sessions/*`(12개), `.claude/commands/start.md`·`wrap.md` / 교재 원문 = 추적 중인 것 없음(전부 `data/` 안). `.claude/settings.local.json`은 내 PC 전역 ignore(`~/.config/git/ignore`)로만 빠져 있음 → 저장소 `.gitignore`에도 추가
+  - **.gitignore 추가안**: `CLAUDE.local.md`, `.claude/settings.local.json`, `.claude/commands/`, `docs/PROGRESS.md`, `docs/sessions/`, 안전망 `*.ocr.json`, `*.text.json`, `eval/private/`. **추적 해제**: `git rm --cached docs/PROGRESS.md`, `git rm -r --cached docs/sessions .claude/commands`(로컬 파일은 남음)
+  - **CLAUDE.md 분리**(공식 문서 확인 2026-10-01, https://code.claude.com/docs/en/memory — `CLAUDE.local.md`는 개인용 프로젝트 지침, `.gitignore`에 추가, CLAUDE.md 뒤에 읽힘): 팀 `CLAUDE.md` = 작업 범위·환경·한글 경로·DB 규칙(새 버전)·외부 모델·Jev·조정값/프롬프트 위치·보안/저작권 + 브랜치·PR 규칙·마이그레이션 공지 규칙 / 개인 `CLAUDE.local.md` = 세션 시작 루틴, 완료 루틴의 PROGRESS·sessions 갱신, /start·/wrap, 개인 경로(`E:\hf_models`, `UV_CACHE_DIR`)
+  - **폴더 구조**: 코드 import 경로(`app.*`)는 그대로. `docs/team/*` → `docs/guides/`, 새로 `docs/API.md`, `scripts/`(빈 자리), `.github/workflows/ci.yml`, `README.md`. 팀 문서 안의 "PROGRESS 다음 작업" 참조는 Issues 참조로 정리
+  - **README 목차**: 소개(개인 학습용·외부 배포 금지) / 설치(Python 3.12 + uv, Node 22.12+, 모델 위치·용량: 임베딩+리랭커 약 8.5GB, OCR 19MB, C 드라이브 주의) / .env(각자 Gemini 키, DB 정보·TypeSafe 키는 별도 전달, `JUDGE_PROVIDER=none` 기본) / 실행(백엔드 시작 약 1분·RAM 약 4.7GB, 프론트, /docs) / 테스트(가짜 모델 기본, `-m embedding_model` 등, DB 테스트 조건) / 폴더 구조 / 역할 / 브랜치·PR 규칙 / DB 규칙 / 저작권·보안
+  - **CI 초안**(`ci.yml`): backend 잡 = ubuntu + `astral-sh/setup-uv` + `uv sync --locked` + `uv run pytest`, DB 환경변수는 닿지 않는 가짜 값(DB 테스트 건너뜀), `JUDGE_PROVIDER=none`, `PRELOAD_MODELS=false` / frontend 잡 = Node 24 + `npm ci` + `npm run lint` + `npm run build`(working-directory frontend). 실제 모델 테스트는 `addopts`로 이미 제외되고 나머지는 가짜 모델·지연 import라 CI에서 모델 다운로드 없음. 공유 DB 정보는 GitHub Secrets에 넣지 않고 DB 테스트는 PR 전 로컬에서. 문제: `uv.lock`에 nvidia 패키지 43개 → Linux CI에서 CUDA torch 수 GB → uv 공식 방법 pytorch-cpu 인덱스(확인 2026-10-01, https://docs.astral.sh/uv/guides/integration/pytorch/)
+  - **API 문서**: `docs/API.md`(엔드포인트·요청/응답 예시·오류 코드, `/qa`의 `evidence[].page` 문자열·`low_confidence_reasons` 코드·`mcq_check`), API를 바꾸는 PR은 이 문서도 같이 수정. 실제 스키마는 FastAPI `/docs`·`/openapi.json`. TS 타입 자동 생성은 범위 밖
+  - **실행 순서**: 1) .gitignore 수정 + 추적 해제 2) CLAUDE.md 분리 3) 문서 이동·PROGRESS 참조 정리·README 4) docs/API.md 5) DB 없을 때 실패하는 테스트 2개 건너뛰게 수정 6) ci.yml 7) torch CPU 인덱스(별도 PR) 8) PR → CI 통과 확인 → 보호 규칙(아래 "추가" 참고)
+- 결정(2026-10-01, 사용자)
+  - A. 서비스 스키마는 mingyu·mingyu_app 유지. 데이터 담당 결과물은 DB가 아니라 공통 JSON 파일로 받음. 팀원 스키마 규칙은 "각자 실험용 스키마는 본인만, 서비스 스키마 변경은 backend/migrations 번호 파일 + PR + 팀 공지, 재적재·DDL 적용은 민규만"
+  - B. PROGRESS·sessions는 추적 해제만. README에 "현재 상태" 5줄 요약, 남은 작업은 Issues 목록으로 보고(웹에서 직접 생성)
+  - C. questions.csv는 eval/questions.csv로 커밋. 커밋 전 정답 표시가 쪽번호 기준인지 확인
+  - D. torch CPU 인덱스는 정리 PR 머지 직후 별도 PR
+  - 추가: 무료 비공개 저장소는 보호된 브랜치 불가(GitHub 문서 "About protected branches") → README에 "팀 약속: main 직접 push 금지, PR + CI 통과 후 머지". README DB 규칙에 보안 그룹으로 팀원 IP만 허용(설정은 민규가 AWS에서). 팀 문서로 옮긴 파일 목록은 PR 설명에 적기
+- 실행은 `chore/team-onboarding` 브랜치에서 1~6
+
+### [다음 세션 2번: 재적재]
+- 팀원과 A안 합의 진행 중: 팀원 정제 데이터(1·2과목 완료, 3과목 진행 중, R 코드·실행 결과·수식·표·시각자료·S3 이미지·관계 포함)를 공통 JSON으로 받아 우리 파이프라인으로 재임베딩. 두 DB 동시 검색(B안)은 하지 않음
+- 공통 JSON 형식 샘플을 받은 뒤 그 기준으로 재적재 조사. 1·2과목을 기존 데이터와 별도로 넣어 33문항·기출 15문제로 비교 후 교체, 3과목은 오면 교체
+
+### 이전 목록 (2026-10-01 이전 순서)
 설계는 ARCHITECTURE의 "질의 흐름", "판정기", "화면" 절과 D-007, D-024~D-027 참고.
 - (완료 2026-10-01) 팀 비교 준비 — 답변 온도 0 고정, 객관식 보기별 판단 규칙(D-027), 기출 자동 채점·실행 비교 리포트(`mcq_run compare`), DB 소스 확인. 결과는 "자체 평가 메모"
 - (완료 2026-10-01) 판정기(Jev) — 회색 구간 can_answer(질문 + 근거 K개), 객관식 일관성 검사(코드), judgments는 metadata에만(D-028). 결과는 "자체 평가 메모"
   - 남은 것: (2026-10-01 켬) 0.5/0.8은 잠정값 → 재적재 후 `metadata.judge.probability`로 다시 잡는다. p26-3 거절(어긋나는 근거가 있는데 거절)은 그대로. 근거 일치 판정(verify)은 아직
 - (완료 2026-10-01) 최소 공부 화면 — 질문 입력 → 답변과 근거 표시 한 화면, 판정기 켬(D-028 덧붙임, D-029). 실제 확인 3건은 "자체 평가 메모"
-1. **[다음 세션 첫 작업] 화면 실사용 + 답변 피드백** — 화면으로 실제 공부 질문을 써 보며 문제를 모으고, 답변 피드백(좋음/틀림 + 메모) 저장을 붙인다
+1. **화면 실사용 + 답변 피드백** — 화면으로 실제 공부 질문을 써 보며 문제를 모으고, 답변 피드백(좋음/틀림 + 메모) 저장을 붙인다
    - 먼저 할 일: 피드백을 어디에 저장할지 사용자와 정한다(후보: query_logs.metadata 갱신 / mingyu_app.solutions·solution_evidence + judgments(solution_id로 연결, D-028) — 새 테이블·컬럼이 필요하면 마이그레이션, 사용자 확인 후). 검수 탭(보충·수정 목록)은 그다음
    - 화면 전체 구성(상단바·사이드바·업로드 탭)은 팀과 정한 뒤. 검색 대상 선택을 "업로드한 자료(문서) 선택"으로 바꾸려면 `/qa`에 자료 필터부터 추가해야 한다(`SourceSelector.tsx`만 교체)
    - Gemini 무료 한도 때문에 화면 테스트도 질문 수를 아낀다. 서버 시작 약 1분(모델 로드)
@@ -171,3 +199,4 @@
 - 2026-10-01: 팀 비교 준비 — 답변 온도 0 고정, 객관식 보기별 판단 규칙·풀이 형식(D-027), 기출 자동 채점·실행 비교(`mcq_run compare`), 기출 15문제 2회 맞음 12·틀림 0(기준선 9·0, 실행 간 바뀜 없음), DB 소스 확인(324쪽 전부 text.zip, 구조화 JSON 미사용), PARTIAL run 3건 확인(반입 run, 정상). 다음 순서 판정기 → 최소 화면, 팀원 정제 데이터 오면 재적재 끼어들기, 청킹 보완·시각자료는 데이터 확정 후, 팀 비교 보류 (테스트 110개)
 - 2026-10-01: 판정기(Jev) — TypeSafe can_answer(회색 구간, 질문 + 근거 K개, 0.5/0.8 잠정값, 재시도·오류 시 none 동작), query_logs.metadata.judge 기록(judgments는 연결 컬럼 없어 보류), 객관식 일관성 검사(`mcq_check`, `mcq_run check`), PARTIAL run 3건 확인(반입 run, 누락 없음), 실제 호출 c06·c09·n08 예상과 일치 (테스트 127개, D-028)
 - 2026-10-01: 최소 공부 화면 — frontend/ 생성(Vite 8 + React 19 + TS, 프록시), 질문 → 답변·객관식 보기 줄·확신 낮음 문구·근거 원문·개발 정보, 연결·시간 초과 오류 문구, 판정기 켬, 실제 확인 c06·객관식 p84-1·n08 (테스트 127개, D-028·D-029)
+- 2026-10-01: 팀 합류 준비 조사(파일 변경 없음) — 추적 파일 121개 분류, 커밋 기록 검사(data/·.env·비밀값 0건), DB 없는 조건 테스트(실패 2개 확인), .gitignore·추적 해제안, CLAUDE.md/CLAUDE.local.md 분리안, README 목차·CI 초안·API 문서 방안, 결정 A~D 기록, 다음 순서 저장소 정리 → 재적재(공통 JSON) (테스트 127개, D-030)
