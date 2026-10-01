@@ -1,4 +1,4 @@
-# MODIFY_GUIDE — 무엇을 바꾸려면 어디를 고치나 (2026-09-30 기준)
+# MODIFY_GUIDE — 무엇을 바꾸려면 어디를 고치나 (2026-10-01 기준)
 
 사용자가 직접 값을 조정할 때 보는 문서다. 원칙은 CLAUDE.md의 "조정 가능한 값" 규칙을 따른다. 조정할 만한 값은 `.env` 또는 `backend/app/core/config.py` 한 곳에 있고, LLM 프롬프트 문장은 `backend/app/prompts/` 아래 텍스트 파일에 둔다.
 
@@ -24,8 +24,8 @@
 | 처리 단계 순서·단계별 완료 상태 | `backend/app/ingestion/pipeline.py` | `DEFAULT_STAGES` (단계 이름, 함수, 끝나면 설정할 상태) | `uv run pytest` / 업로드 후 `GET /processing-runs/{run_id}` |
 | 파이프라인 버전 표시 | `backend/app/ingestion/pipeline.py` | `PIPELINE_VERSION` (processing_runs.pipeline_version에 기록) | DataGrip: `mingyu.processing_runs.pipeline_version` |
 | DB 커넥션 풀 크기 | `backend/app/db/connection.py` | `create_pool`의 `min_size`, `max_size` (현재 1/5, 공유 서버이므로 크게 늘리지 않기) | 서버 재시작 → `GET /health/db` |
-| Gemini 모델 | `.env` | `GEMINI_MODEL_LITE`, `GEMINI_MODEL_STRONG` — 지금은 processing_runs.gemini_model 기록에만 쓰임 | DataGrip: `mingyu.processing_runs.gemini_model` |
-| 판정기 선택 | `.env` | `JUDGE_PROVIDER` (none / jev_typesafe / jev_cloudflare / llm) — 지금은 `/health/db` 표시에만 쓰임 | `GET /health/db`의 `judge_provider` |
+| Gemini 모델 | `.env` | `GEMINI_MODEL_LITE`, `GEMINI_MODEL_STRONG`. 질의 답변은 `ANSWER_MODEL`(lite/strong, strong이 실패하면 lite로 폴백) | 서버 재시작 → `/qa` 응답의 `llm.model` |
+| 판정기 선택 | `.env` | `JUDGE_PROVIDER` (none / jev_typesafe / jev_cloudflare / llm) — **지금은 none만 동작**(다른 값이면 서버 시작 시 오류, 1-c에서 구현). none이면 회색 구간은 답변 + "근거 확신 낮음" | `GET /health/db`의 `judge_provider` / `/qa` 응답의 `judge` |
 | 팀 교재 PDF 장 ↔ 인쇄 쪽 매핑, 과목 제목, 합본 텍스트 파일 처리 | `data/raw/adsp/page_map.json` (gitignore) | `segments`(PDF 장 범위 + offset), `skip_pdf`(중복 촬영 등 건너뛸 장), `text_files`(여러 쪽짜리 텍스트 파일 → 쪽 목록. `split_at_lines`로 나눌 줄 번호 지정, 없으면 첫 쪽에 붙음), `title`/`subject`/`source_name` | `cd backend; uv run python -m app.ingestion.team_import --dry-run` → 요약과 `data/reports/team_import/plan.json`. 실제 반입은 `--apply --subject subject1`(전체는 `all`), 결과는 `apply_{key}.json` |
 | 팀 교재 저장 이미지 해상도·화질 | `.env` | `TEAM_IMPORT_RENDER_DPI`(72 = 원본 해상도), `TEAM_IMPORT_JPEG_QUALITY` | dry-run 끝 줄에 적용 값 표시 / 반입 후 `pages.source_width/height` |
 | 팀 교재 쪽번호 대조 미리보기 | `.env` | `TEAM_IMPORT_PREVIEW_DPI` (저장용과 별개) | `uv run python -m app.ingestion.team_import --preview subject3:84,85` → `data/reports/team_import/preview_subject3.jpg` |
@@ -46,6 +46,10 @@
 | "확인 불가" 판단 기준(벡터 하한 + 리랭커 3구간) | `.env` | `ANSWERABLE_MIN_VECTOR_SCORE`(0.45, 1단계: 벡터 1위 점수가 이보다 낮으면 바로 확인 불가), `ANSWERABLE_MIN_RERANK_SCORE`(0.03, 리랭커 1위가 이보다 낮으면 확인 불가), `ANSWERABLE_CONFIDENT_RERANK_SCORE`(0.15, 하한~이 값 사이는 회색 구간 → 판정기가 없으면 답변 + "근거 확신 낮음", 이 값 이상은 그대로 답변). 하한은 상한 이하여야 함. 모두 33문항 기준 잠정값(D-024) | `cd backend; uv run python -m app.retrieval.search "질문"`의 "판단" 줄 / `/qa` 응답의 `zone`·`zone_reason` / 평가 요약의 "2단계" 표 |
 | 검색 평가 리랭커 임계값 후보 | `.env` | `EVAL_RERANK_THRESHOLDS`(0.01~0.7, 쉼표 구분, 리랭커 1위 점수 0~1) | 평가 요약의 "리랭커 임계값"·"2단계" 표 |
 | 청킹·임베딩 다시 돌리기 | 명령 | `cd backend; uv run python -m app.ingestion.run_stages --apply --subject all` (청킹, VERIFIED) / `--stages embed` (임베딩, EMBEDDED) / `--stages chunk,embed` / `--pages 14,15`로 쪽 제한 / 업로드 자료는 `--book-id`. Ctrl+C로 끊으면 그 run은 FAILED로 닫히고, 같은 명령을 다시 실행하면 됨 | DataGrip: `mingyu.theory_chunks`, `pages.page_metadata.chunking` |
+| 답변 프롬프트(시험형 형식·확인 불가 규칙) | `backend/app/prompts/` | `answer_system.txt`(규칙·형식), `answer_user.txt`(근거·질문 배치, `$evidence` `$question`), `answer_evidence_item.txt`(근거 1개 표시, `$n` `$book` `$page` `$path` `$text`), `answer_schema.json`(JSON 필드와 설명). 파일은 매 질문마다 다시 읽으므로 서버 재시작 불필요. 스키마 필드 이름을 바꾸면 `app/qa/service.py`도 고쳐야 함 | `cd backend; uv run python -m app.qa.sample_run --ids c06,c09` → `data/reports/answers/` |
+| 답변 생성 세부값 | `.env` | `ANSWER_TEMPERATURE`(0.2), `GEMINI_TIMEOUT_SECONDS`(60), `GEMINI_MAX_RETRIES`(3, 429/5xx/시간 초과 시 같은 모델 재시도), `GEMINI_RETRY_BASE_SECONDS`(2, 대기 2→4→8초) | `/qa` 응답의 `llm.failed_attempts` |
+| 서버 시작 시 모델 미리 로드 | `.env` | `PRELOAD_MODELS`(true, 약 1분·RAM 약 4.6GB). false면 `/qa`가 503(테스트용) | 서버 로그 `Application startup complete` 후 `/docs`에서 `POST /qa` |
+| 질의 샘플 실행(평가 질문 일부) | 명령 | 서버를 켠 상태에서 `cd backend; uv run python -m app.qa.sample_run --ids c06,c09,n08` (한 번에 최대 12개, Gemini 무료 한도 때문에 전체 실행 금지) | `data/reports/answers/{시각}.md`(질문·판정·답변·인용 원문), DataGrip `mingyu.query_logs.metadata` |
 | DB 구조(컬럼·테이블 추가) | `backend/migrations/` | 새 번호 파일(`003_...sql`) 추가. 적용된 파일은 수정 금지, 팀 규격 컬럼은 추가만 | `cd backend; uv run python -m app.db.migrate --dry-run` → 사용자 확인 → `uv run python -m app.db.migrate` |
 
 ## 2. 아직 없는 기능 (구현하면 채운다)
@@ -57,11 +61,10 @@
 | crop 여백 | | | |
 | 시각자료 설명문 프롬프트 | | | |
 | 벡터/키워드 검색 비중(하이브리드) | | | |
-| 답변 생성 프롬프트(시험모드) | | | |
 | 제약 프리셋 | | | |
 | 문제 사진 추출 프롬프트(그래프 텍스트화 포함) | | | |
 | 판정기 신뢰도 임계값 | | | |
-| Gemini 재시도 횟수·대기 시간, 분당 요청 수 | | | |
+| Gemini 분당 요청 수 제한(대량 처리용) | | | |
 | 오답노트 틀린 유형·비교 프롬프트 | | | |
 | 재질문 문제 생성 프롬프트 | | | |
 | 검수 보고서 표시 항목·색 | | | |

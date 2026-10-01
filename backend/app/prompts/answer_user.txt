@@ -1,0 +1,7 @@
+[근거]
+$evidence
+
+[질문]
+$question
+
+위 [근거]만 사용해 규칙대로 JSON으로 답하라. 근거에 답이 없으면 추측하지 말고 unanswerable을 true로 하라.

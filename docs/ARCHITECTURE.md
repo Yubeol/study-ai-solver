@@ -8,15 +8,18 @@ adsp-study-rag/
 ├── CLAUDE.md
 ├── backend/
 │   ├── app/
-│   │   ├── main.py        # FastAPI 앱 (lifespan에서 커넥션 풀 열고 닫음)
-│   │   ├── api/           # 라우터: health, books(과목·자료·업로드), runs(처리 상태), deps
+│   │   ├── main.py        # FastAPI 앱 (lifespan: 커넥션 풀, 질의 모델(임베딩·리랭커) 미리 로드)
+│   │   ├── api/           # 라우터: health, books(과목·자료·업로드), runs(처리 상태), qa(질의), deps
 │   │   ├── core/config.py # .env 설정 (pydantic-settings, 스키마 이름 검증)
 │   │   ├── db/            # connection.py(풀, scoped_transaction), migrate.py(마이그레이션 실행기)
-│   │   ├── repositories/  # books / pages / runs SQL (스키마는 Identifier로 명시)
+│   │   ├── repositories/  # books / pages / runs / query_logs SQL (스키마는 Identifier로 명시)
 │   │   ├── storage/       # Storage 인터페이스, local(구현), s3(자리만), get_storage()
 │   │   ├── ingestion/     # images(업로드 검증·decode_bgr), ocr(PaddleOCR 엔진), pipeline(단계 실행·상태 갱신), stages(단계 함수), chunking(청킹 규칙), embedding(BGE-M3), team_import, run_stages
-│   │   └── retrieval/     # search(v_searchable_theory 벡터 검색), evaluate(검색 평가), eval_report(평가 HTML 보고서)
-│   │   # 이후 추가 예정: judge, llm
+│   │   ├── retrieval/     # search(벡터 검색·"확인 불가" 3구간), rerank(리랭커), evaluate(검색 평가), eval_report(평가 HTML 보고서)
+│   │   ├── qa/            # service(질의 흐름: 검색→3구간→답변→인용 검증→query_logs), sample_run(평가 질문 일부를 /qa로 실행)
+│   │   ├── llm/           # gemini(REST generateContent, JSON 구조화 출력, 재시도·폴백)
+│   │   ├── judge/         # 판정기 인터페이스(get_judge, 지금은 none만)
+│   │   └── prompts/       # LLM 프롬프트 텍스트(answer_system/answer_user/answer_evidence_item.txt, answer_schema.json)
 │   ├── migrations/   # 번호 붙은 SQL 파일 (DDL 변경 이력)
 │   └── tests/        # DB 테스트는 접속 불가 시 skip
 ├── frontend/         # React + Vite, 개인 프론트 (미생성, 공용 프론트 없음 D-021)
@@ -30,6 +33,7 @@ adsp-study-rag/
 - `POST /books` {title, subject, material_type, edition?, source_name?} / `GET /books?subject=` / `GET /books/{id}` (page_count, status_counts 포함)
 - `POST /books/{id}/pages` (multipart `files` 여러 장, PNG/JPEG/WEBP, 장당 `MAX_UPLOAD_MB`) → 202 {run_id, pages}. 전부 검증 후 저장, 한 장이라도 실패하면 아무것도 저장하지 않음
 - `GET /books/{id}/pages`, `GET /processing-runs/{run_id}` (run 요약 + 페이지별 상태·현재 단계·오류)
+- `POST /qa` {question, k?} → {status(answered/unanswerable/error), zone(reject/gray/answer), zone_reason, confidence(high/low/unanswerable), low_confidence, answer, explanation, confusions, citations[인용된 근거: n, chunk_id, book_title, page, path, raw_text, 점수], evidence[넘긴 근거 전체], scores, timings_ms, llm{model, usage, citation_check, failed_attempts}, query_log_id}. 모델 미로드면 503
 - 응답에서 저장소 URI(source_s3_uri)는 뺀다.
 - 테스트: 루트에서 `uv run pytest`
 
@@ -150,6 +154,20 @@ adsp-study-rag/
 5. 근거 일치 판정(판정기): 낮으면 강한 모델 재생성 또는 "확신 낮음" 표시
 6. 저장: mingyu_app 상세 + query_logs 요약
 7. "자료에서 확인 불가"이면 이론 보충 입력으로 연결(아래 "이론 보충·수정")
+
+### 질의 흐름 구현 (2026-10-01, `app/qa/service.py`, D-025)
+- 서버 시작 시 `load_qa_models`: 임베딩·리랭커 로드 + 워밍업 1회(지연 로딩 안 함, 약 1분, RSS 약 4.6GB), Gemini 클라이언트, 판정기(`JUDGE_PROVIDER=none` → 없음). `PRELOAD_MODELS=false`(테스트용)면 `/qa`는 503.
+- 순서: 질문 임베딩 → 벡터 후보 N(10) → (벡터 1위 ≥ 하한이면) 리랭크 → 상위 K(5) → 3구간
+  - reject: LLM 호출 없이 "자료에서 확인 불가"
+  - gray: 판정기 can_answer(1-c). 판정기가 없으면 답변 + `low_confidence=true`("근거 확신 낮음")
+  - answer: 답변
+- 답변 생성: Gemini `generateContent` + `responseJsonSchema`(`prompts/answer_schema.json`: unanswerable, answer, explanation, confusions, cited). 모델은 `ANSWER_MODEL`(lite 기본, strong이면 lite 폴백), 429/5xx/시간 초과/잘못된 JSON은 재시도(D-010).
+  - LLM 입력: 근거마다 `[n] 과목(책 제목) / 교재 쪽 / 제목 경로` + clean_text. 응답의 근거 표시는 raw_text(교재 원문).
+  - 시험형 형식: answer(핵심 1~2문장) → explanation(근거 기반 설명, [n] 인용) → confusions(근거 안의 헷갈리는 개념, 없으면 빈 값)
+  - LLM이 unanswerable=true면 "자료에서 확인 불가"(3구간 뒤 한 겹 더). 유효 인용이 하나도 없으면 low_confidence.
+  - 인용 검증: cited·본문 [n] 중 1..K 밖 번호는 제거하고 `citation_check`(invalid_cited, invalid_inline, inline_not_in_cited)에 기록.
+- 기록: 팀 규격 `query_logs` 1행(question_text, retrieved_theory_ids=넘긴 근거 청크 id, answer=답+설명+구분, latency_ms, token_usage=Gemini usageMetadata, metadata={zone, zone_reason, status, scores, confidence, timings_ms(embed/vector/rerank/judge/llm/total), evidence(n·chunk_id·쪽·점수·cited), cited, citation_check, model, failed_attempts, …}). **컬럼 추가 없음**(metadata JSONB 사용). mingyu_app.solutions/solution_evidence 상세 저장은 아직 안 함.
+- 샘플 실행: `python -m app.qa.sample_run --ids c06,c09,...`(서버 실행 중, 한 번에 최대 12문항) → `data/reports/answers/{시각}.json/.md`
 
 ### "확인 불가" 2단계 판단 (2026-09-30, 값은 33문항 기준 잠정값 — D-024)
 - 1단계(거름망): **임베딩 1위 점수**가 아주 낮으면 리랭커·LLM 호출 없이 바로 "자료에서 확인 불가". 이 값은 자료에 없는 질문을 다 거르려는 용도가 아니라, 확실히 먼 질문만 싸게 끊는 용도라 낮게 잡는다.

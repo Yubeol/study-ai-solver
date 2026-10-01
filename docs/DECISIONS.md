@@ -214,3 +214,14 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 질문당(평균/중앙/최대 초): 임베딩 0.94 / 0.14 / **26.6**(첫 질문만 — 가중치 지연 로딩), 벡터 검색 0.44 / 0.42 / 0.62, 리랭크(N=10) 4.12 / 4.06 / 5.15. → 서버 시작 시 두 모델을 로드하고 **한 번씩 돌려 두기(워밍업)**로 결정(`app/qa/service.py`의 `load_qa_models`). 리랭크 시간은 어제 평가(평균 6.0초)보다 짧았다(PC 부하 차이로 보임).
   - **`RERANKER_MAX_LENGTH` 1024 vs 512**(evaluate --reranker BAAI/bge-reranker-v2-m3 --n 10, `.env` 값만 바꿈): 512에서 잘리는 쌍 2/330(최대 545토큰), hit@1 22/26·hit@3 26·hit@5 26·MRR 0.917·리랭커 1위 점수 분포 모두 **동일**, 리랭크 평균 4.25초(1024) vs 4.32초(512)로 차이 없음 → **1024 유지**(잘림 0, 손해 없음). 보고서 `data/reports/eval/20261001-091130`(1024), `20261001-091450`(512).
 - 평가 결과 파일: `data/reports/eval/` 20260930-201321(벡터), -202649(v2-m3 N20), -203344(-ko N20), -203942(v2-m3 clean), -204741(-ko clean), -205236(v2-m3 N10, 채택), -210116(v2-m3 N30).
+
+## D-025 질의 흐름: Gemini JSON 구조화 출력 + 인용 검증, query_logs.metadata 기록, 모델 사전 로딩 (2026-10-01)
+- Gemini 구조화 출력(확인 2026-10-01): REST `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`, 헤더 `x-goog-api-key`, `generationConfig.responseMimeType="application/json"` + `responseJsonSchema`. 응답 텍스트는 `candidates[0].content.parts[].text`, 토큰 수는 `usageMetadata`. gemini-3.5-flash-lite로 실제 호출해 JSON 응답 확인. 출처: https://ai.google.dev/api/generate-content , https://ai.google.dev/gemini-api/docs/structured-output (이 문서 예시는 새 Interactions API `v1beta/interactions` + `response_format`을 쓰지만 generateContent도 폐기 표시 없음 → 기존 generateContent 사용)
+- HTTP 클라이언트는 SDK 대신 httpx(이미 dev 의존성, 본 의존성으로 이동). 새 SDK 의존성을 늘리지 않고 재시도·폴백(D-010)을 직접 제어하기 위함.
+- 답변 JSON: unanswerable, answer(핵심 1~2문장), explanation, confusions, cited. 인용 번호는 코드로 1..K 범위 검사 → 밖이면 제거·기록. 프롬프트와 스키마 설명문은 `backend/app/prompts/`.
+- 3구간 뒤 한 겹 더: 회색·답변 구간이라도 LLM이 근거에 답이 없다고 하면(unanswerable) "자료에서 확인 불가". 첫 샘플에서 n08(회색, 리랭커 0.131)이 이 겹에서 걸러짐.
+- 기록: 팀 규격 query_logs의 기존 컬럼 + `metadata` JSONB(3구간 판정, 단계별 시간, 인용 검증 등). 컬럼 추가 불필요.
+- 모델 사전 로딩: D-024 측정에서 첫 질문 임베딩이 26.6초(지연 로딩) → 서버 시작 시 임베딩·리랭커 로드 + 워밍업. 지연 로딩 경로는 두지 않고 `PRELOAD_MODELS=false`(테스트)면 /qa 503.
+- 판정기는 아직 none만(`app/judge`의 get_judge). 다른 값이면 시작 시 NotImplementedError → 1-c에서 구현.
+- 첫 샘플(10문항, 2026-10-01): 질문당 전체 5.7~7.4초(리랭크 3.4~5.1초, LLM 1.5~2.0초), 확인 불가(reject)는 0.5~4.4초. 토큰 약 2,000~2,750/질문. 결과 `data/reports/answers/20261001-091851.md`.
+

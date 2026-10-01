@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr = SecretStr("")
     gemini_model_lite: str = ""
     gemini_model_strong: str = ""
+    gemini_timeout_seconds: float = Field(default=60, gt=0)  # 요청 1번의 제한 시간
+    gemini_max_retries: int = Field(default=3, ge=0)  # 429/503/시간 초과 시 같은 모델로 다시 시도할 횟수(D-010)
+    gemini_retry_base_seconds: float = Field(default=2, ge=0)  # 재시도 대기 = 이 값 × 2^(시도-1)
+
+    # 질의 답변 (ARCHITECTURE "질의 흐름"). 프롬프트는 backend/app/prompts/answer_*.txt
+    answer_model: Literal["lite", "strong"] = "lite"  # strong이 재시도 후에도 실패하면 lite로 폴백(D-010)
+    answer_temperature: float = Field(default=0.2, ge=0, le=2)
+    # 서버 시작 시 임베딩·리랭커를 로드하고 한 번 돌려 둔다(첫 질문 지연 방지). false면 질의 API가 503(지연 로딩 안 함).
+    # 테스트(conftest)에서만 false로 둔다.
+    preload_models: bool = True
 
     # 임베딩
     embedding_model: str = ""
