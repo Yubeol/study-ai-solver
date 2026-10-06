@@ -306,9 +306,14 @@ def test_insert_query_log_roundtrip(db_conn, settings):
 
 
 def test_qa_api(monkeypatch, logged):
+    from app.api.deps import get_conn
     from app.main import create_app
 
+    def fake_conn():
+        yield None  # 검색·기록이 가짜라 커넥션을 쓰지 않는다 → DB 없이(CI) 돈다
+
     app = create_app()
+    app.dependency_overrides[get_conn] = fake_conn
     with TestClient(app) as client:
         assert client.post("/qa", json={"question": "질문"}).status_code == 503  # 모델 미로드(지연 로딩 안 함)
         monkeypatch.setattr(service, "search_theory", lambda conn, s, vec, k: _rows()[:k])

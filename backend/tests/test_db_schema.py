@@ -30,7 +30,8 @@ def test_scoped_transaction_pins_schema_and_reverts(db_conn, settings):
     assert after == before  # SET LOCAL은 트랜잭션 밖으로 새지 않는다
 
 
-def test_pool_connection_does_not_leak_search_path(settings):
+def test_pool_connection_does_not_leak_search_path(db_conn, settings):
+    # db_conn은 쓰지 않지만, DB에 접속할 수 없으면 건너뛰게 하려고 받는다.
     pool = create_pool(settings)
     pool.open(wait=True, timeout=15)
     try:
