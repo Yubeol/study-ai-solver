@@ -1,150 +1,238 @@
-import { useEffect, useRef, useState } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 
 type Props = {
   loading: boolean
   onSubmit: (question: string) => void
 }
 
-export default function QuestionForm({ loading, onSubmit }: Props) {
-  const [question, setQuestion] = useState('')
-  const [elapsed, setElapsed] = useState(0)
-  const [preview, setPreview] = useState<string | null>(null)
+export default function QuestionForm({
+                                       loading,
+                                       onSubmit,
+                                     }: Props) {
+  const [
+    question,
+    setQuestion,
+  ] = useState('')
 
-  const fileRef = useRef<HTMLInputElement>(null)
+  const [
+    elapsed,
+    setElapsed,
+  ] = useState(0)
+
+  const [
+    preview,
+    setPreview,
+  ] = useState<string | null>(null)
+
+  const fileRef =
+      useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (!loading) return
+    if (!loading) {
+      return
+    }
 
-    const started = Date.now()
+    const started =
+        Date.now()
 
-    const timer = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - started) / 1000))
-    }, 1000)
+    const timer =
+        setInterval(() => {
+          setElapsed(
+              Math.floor(
+                  (Date.now() - started) /
+                  1000,
+              ),
+          )
+        }, 1000)
 
     return () => {
       clearInterval(timer)
+
       setElapsed(0)
     }
   }, [loading])
 
   const submit = () => {
-    const q = question.trim()
+    const q =
+        question.trim()
 
-    if (q && !loading) {
+    if (
+        q &&
+        !loading
+    ) {
       onSubmit(q)
     }
   }
 
-  const handleImage = (file?: File) => {
-    if (!file) return
-
-    if (preview) {
-      URL.revokeObjectURL(preview)
+  const handleImage = (
+      file?: File,
+  ) => {
+    if (!file) {
+      return
     }
 
-    setPreview(URL.createObjectURL(file))
+    if (preview) {
+      URL.revokeObjectURL(
+          preview,
+      )
+    }
+
+    setPreview(
+        URL.createObjectURL(
+            file,
+        ),
+    )
 
     /*
-      TODO:
-      OCR API가 생기면 여기에서 이미지 파일을 백엔드로 보내고,
-      반환받은 OCR 문자열을 setQuestion(ocrText) 하면 됨.
-
-      현재 팀 api.ts에는 이미지 OCR 엔드포인트가 없으므로
-      지금은 이미지 미리보기까지만 처리한다.
+      OCR API 연결 전에는
+      이미지 미리보기만 처리.
     */
   }
 
   return (
-      <section className="question-area">
-        <div className="section-heading">
-          <div>
-            <h1>문제 풀기</h1>
-            <p>기출 문제 사진을 올리거나 문제를 직접 입력해주세요.</p>
-          </div>
+      <section className="question-column">
+        <div className="page-heading">
+          <h1>
+            문제 풀기
+          </h1>
+
+          <p>
+            문제 사진을 올리거나
+            직접 입력해주세요.
+          </p>
         </div>
 
-        <div className="upload-card">
-          {!preview ? (
+        {!preview ? (
+            <div
+                className="upload-box"
+                onClick={() =>
+                    fileRef.current?.click()
+                }
+            >
+              <div className="upload-symbol">
+                +
+              </div>
+
+              <h2>
+                문제 이미지를 올려주세요
+              </h2>
+
+              <p>
+                JPG, PNG 이미지를
+                선택할 수 있어요.
+              </p>
+
               <button
                   type="button"
-                  className="upload-empty"
-                  onClick={() => fileRef.current?.click()}
+                  className="primary-button"
               >
-                <span className="upload-plus">＋</span>
-
-                <strong>문제 이미지를 올려주세요</strong>
-
-                <span>
-              JPG, PNG 이미지 파일을 선택할 수 있어요.
-            </span>
-
-                <span className="fake-upload-button">
-              사진 선택하기
-            </span>
+                사진 선택하기
               </button>
-          ) : (
-              <div className="image-preview-wrap">
-                <div className="card-header">
-                  <strong>업로드한 문제</strong>
 
-                  <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => {
-                        URL.revokeObjectURL(preview)
-                        setPreview(null)
-
-                        if (fileRef.current) {
-                          fileRef.current.value = ''
-                        }
-                      }}
-                  >
-                    이미지 삭제
-                  </button>
-                </div>
-
-                <img
-                    className="question-preview"
-                    src={preview}
-                    alt="업로드한 문제"
-                />
+              <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  hidden
+                  onChange={(e) =>
+                      handleImage(
+                          e.target.files?.[0],
+                      )
+                  }
+              />
+            </div>
+        ) : (
+            <div className="panel-card">
+              <div className="panel-title-row">
+                <h2>
+                  업로드한 이미지
+                </h2>
 
                 <button
                     type="button"
-                    className="change-image-button"
-                    onClick={() => fileRef.current?.click()}
+                    className="text-button danger"
+                    onClick={() => {
+                      if (preview) {
+                        URL.revokeObjectURL(
+                            preview,
+                        )
+                      }
+
+                      setPreview(null)
+
+                      if (
+                          fileRef.current
+                      ) {
+                        fileRef.current.value =
+                            ''
+                      }
+                    }}
                 >
-                  다른 이미지 선택
+                  삭제
                 </button>
               </div>
-          )}
 
-          <input
-              ref={fileRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              hidden
-              onChange={(e) => handleImage(e.target.files?.[0])}
-          />
-        </div>
+              <img
+                  src={preview}
+                  alt="업로드한 문제"
+                  className="question-image"
+              />
 
-        <div className="question-text-card">
-          <div className="card-header">
+              <button
+                  type="button"
+                  className="secondary-button full-button"
+                  onClick={() =>
+                      fileRef.current?.click()
+                  }
+              >
+                다른 이미지 선택
+              </button>
+
+              <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  hidden
+                  onChange={(e) =>
+                      handleImage(
+                          e.target.files?.[0],
+                      )
+                  }
+              />
+            </div>
+        )}
+
+        <div className="panel-card extracted-card">
+          <div className="panel-title-row">
             <div>
-              <strong>추출된 문제</strong>
-              <span className="card-description">
-              OCR 결과를 확인하고 잘못된 부분은 직접 수정할 수 있어요.
-            </span>
+              <h2>
+                추출된 문제
+              </h2>
+
+              <p className="panel-description">
+                잘못 인식된 부분은
+                직접 수정할 수 있어요.
+              </p>
             </div>
           </div>
 
           <textarea
+              className="question-textarea"
               value={question}
-              onChange={(e) => setQuestion(e.target.value)}
+              onChange={(e) =>
+                  setQuestion(
+                      e.target.value,
+                  )
+              }
               onKeyDown={(e) => {
                 if (
                     e.key === 'Enter' &&
-                    (e.ctrlKey || e.metaKey)
+                    (e.ctrlKey ||
+                        e.metaKey)
                 ) {
                   submit()
                 }
@@ -158,23 +246,28 @@ export default function QuestionForm({ loading, onSubmit }: Props) {
 ② ...
 ③ ...
 ④ ...`}
-              rows={10}
           />
 
           <div className="question-actions">
             {loading && (
                 <span className="loading-text">
-              교재에서 근거를 찾는 중… {elapsed}초
+              교재에서 근거를
+              찾는 중… {elapsed}초
             </span>
             )}
 
             <button
                 type="button"
-                className="solve-button"
+                className="primary-button"
                 onClick={submit}
-                disabled={loading || !question.trim()}
+                disabled={
+                    loading ||
+                    !question.trim()
+                }
             >
-              {loading ? '분석 중…' : '문제 풀기'}
+              {loading
+                  ? '분석 중…'
+                  : '문제 풀기'}
             </button>
           </div>
         </div>
