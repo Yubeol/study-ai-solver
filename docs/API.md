@@ -21,6 +21,7 @@
 | POST | `/books/{book_id}/pages` | 페이지 이미지 업로드 → 백그라운드 처리 시작 |
 | GET | `/processing-runs/{run_id}` | 처리 실행 하나 + 그 페이지들 |
 | POST | `/qa` | 질문 → 답변·근거 |
+| POST | `/ocr` | 문제 사진 → 텍스트(질문 입력칸 채우기) |
 
 ## 상태 확인
 
@@ -187,3 +188,24 @@ book 객체:
 | 422 | `question`이 비었거나 2000자 초과, `k` 범위 밖 |
 | 503 | 질의 모델 미로드(`PRELOAD_MODELS=false`) |
 | 500 | DB 접속 실패 등 |
+
+## 문제 사진 OCR
+
+### `POST /ocr`
+요청: `multipart/form-data`, 필드 `file` = 문제 사진 1장(PNG/JPEG/WEBP, `MAX_UPLOAD_MB` 이하). 사진은 저장하지 않습니다.
+
+응답(200):
+```json
+{"text": "다음 중 옳지 않은 것은?\n① … ② …", "line_count": 3, "mean_confidence": 0.88}
+```
+- 인쇄체 PaddleOCR(업로드 경로와 같은 엔진, `OCR_*` 설정). **첫 호출 때 모델을 올려서 느립니다**(처음이면 모델 다운로드 약 19MB).
+- `text`: 줄을 위→아래, 같은 높이는 왼→오른 순서로 이은 문자열(같은 높이는 공백, 다른 줄은 `\n`). 교정하지 않습니다.
+- 프론트 흐름: 사진 → `text`를 "추출된 문제" 칸에 채움 → 사용자가 고침 → `POST /qa`.
+
+오류:
+| 코드 | 경우 |
+|---|---|
+| 400 | 이미지가 아니거나 PNG/JPEG/WEBP가 아님 |
+| 413 | `MAX_UPLOAD_MB` 초과 |
+| 422 | `file` 없음 |
+
