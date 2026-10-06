@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     answer_model: Literal["lite", "strong"] = "lite"  # strong이 재시도 후에도 실패하면 lite로 폴백(D-010)
     # 0 고정(2026-10-01): 실행 간 흔들림을 줄여 비교 가능하게. 0이어도 완전 결정적이라는 보장은 없음(D-025)
     answer_temperature: float = Field(default=0, ge=0, le=2)
+    # 문제 사진 → 문제 텍스트(POST /ocr, D-J-002·D-J-003). 엔진이 안 되면 PaddleOCR로 대신 읽는다.
+    problem_ocr_engine: Literal["google_vision", "gemini"] = "google_vision"
+    google_vision_api_key: SecretStr = SecretStr("")
+    google_vision_language_hints: str = "ko"  # 쉼표로 여러 개(예: ko,en). 비우면 자동 감지
+    google_vision_timeout_seconds: float = Field(default=30, gt=0)
+    # gemini 엔진일 때. 프롬프트는 backend/app/prompts/problem_extract_*.txt
+    problem_extract_model: Literal["lite", "strong"] = "lite"
+    problem_extract_temperature: float = Field(default=0, ge=0, le=2)
     # 서버 시작 시 임베딩·리랭커를 로드하고 한 번 돌려 둔다(첫 질문 지연 방지). false면 질의 API가 503(지연 로딩 안 함).
     # 테스트(conftest)에서만 false로 둔다.
     preload_models: bool = True
@@ -113,6 +121,9 @@ class Settings(BaseSettings):
 
     # 업로드
     max_upload_mb: int = Field(default=20, gt=0)
+    # 보충 이론 등록(POST /supplements, D-J-004). 파일 크기 한도는 MAX_UPLOAD_MB를 같이 쓴다.
+    supplement_max_text_chars: int = Field(default=20000, gt=0)
+    supplement_max_pdf_pages: int = Field(default=50, gt=0)
 
     # OCR (PaddleOCR, 인쇄체). 모델 이름이 비어 있으면 언어 기본 모델을 쓴다.
     ocr_model_dir: Path | None = None  # PADDLE_PDX_CACHE_HOME으로 전달. 비우면 ~/.paddlex

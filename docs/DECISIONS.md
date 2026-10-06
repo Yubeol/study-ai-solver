@@ -338,3 +338,25 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 배경: 프론트 UI PR(`feat/frontend-ui`)의 문제 사진 입력(`QuestionForm`)은 사진 → "추출된 문제" 칸 채우기 → 사용자가 고침 → `/qa` 흐름이고, OCR API가 없어 미리보기까지만 되어 있다.
 - 결정: `POST /ocr`은 문제 사진을 저장하지 않고 텍스트만 돌려준다. 사용자가 텍스트를 고친 뒤 `/qa`로 보내므로, 비전 LLM으로 바로 푸는 `/qa/image` 대신 업로드 경로의 인쇄체 PaddleOCR 엔진을 재사용한다(추가 API 비용·모델 없음, DB 사용 없음).
 - 줄 순서: 세로 중심 기준 위→아래, 같은 높이(앞 줄 높이의 절반 이내)는 왼→오른으로 공백 연결.
+
+## D-J-002 문제 사진 추출은 Gemini 비전을 기본으로, PaddleOCR은 대체 경로로 (2026-10-06, D-J-001 일부 변경)
+- 배경: 실제 휴대폰 사진(기울어짐·페이지 휨·뒷장 비침·위아래에 다른 문제)으로 `/ocr`(PaddleOCR)을 시험하니 문제 문장과 ①② 보기를 놓치고, 비친 글자("통H허호…")와 아래 문제 문장을 섞어 읽었다. 이대로 `/qa`에 넣으면 질문 자체가 바뀐다(예: "옳은 것" → "옳지 않은 것").
+- 결정: `/ocr`은 Gemini 비전 구조화 출력(`found`, `problem_text`, `choices`, `figure_description`)으로 가장 온전한 문제 1개만 옮겨 적게 한다. 모델은 `PROBLEM_EXTRACT_MODEL`(기본 lite), 프롬프트는 `backend/app/prompts/problem_extract_*`. 키가 없거나 호출이 실패하면 기존 PaddleOCR로 읽고 `fallback_reason`을 남긴다. PaddleOCR 엔진 설정(`ingestion/ocr.py`)은 교재 업로드와 공유하므로 바꾸지 않는다.
+- 이미지 입력: `GeminiClient.generate_json(..., images=[(바이트, MIME)])` → user 텍스트 파트 뒤에 `inlineData {mimeType, data(base64)}` 파트. 확인 2026-10-06: https://ai.google.dev/api/caching#Part (Part.inlineData / Blob), 요청 전체 20MB 이하·텍스트 다음에 이미지 권장 https://ai.google.dev/gemini-api/docs/image-understanding .
+- 비용·한도: 사진 1장당 Gemini 호출 1회(무료 한도 공유). DB는 쓰지 않는다.
+
+## D-J-003 문제 사진 OCR 기본 엔진은 Google Cloud Vision (2026-10-06, D-J-002 기본값 변경)
+- 배경: 재원 결정으로 문제 사진 글자 인식은 Google Cloud Vision을 쓴다. Gemini 방식(D-J-002)은 지우지 않고 `PROBLEM_OCR_ENGINE=gemini`로 고를 수 있게 둔다.
+- 결정: `PROBLEM_OCR_ENGINE`(기본 `google_vision`). Vision은 REST `POST https://vision.googleapis.com/v1/images:annotate`에 `DOCUMENT_TEXT_DETECTION` + `languageHints`(`GOOGLE_VISION_LANGUAGE_HINTS`, 기본 ko)로 보내고 `fullTextAnnotation.text`를 그대로 돌려준다. 키(`GOOGLE_VISION_API_KEY`)는 `x-goog-api-key` 헤더로만 보낸다. 키가 없거나 실패하면 PaddleOCR로 대신 읽는다.
+- 한계: Vision은 사진의 글자를 모두 읽으므로 위아래에 걸린 다른 문제·비친 뒷장 글자가 섞일 수 있다. 문제 1개만 골라내기·선택지 나누기는 하지 않고 사용자가 입력칸에서 고친다.
+- 확인 2026-10-06: 요청·응답 형식 https://docs.cloud.google.com/vision/docs/ocr , 인증("API key or OAuth token") https://docs.cloud.google.com/vision/docs/request , 가격(기능별 월 1,000단위 무료, 이후 1,000단위당 $1.50, **무료 구간도 결제 계정 필요**) https://cloud.google.com/vision/pricing .
+
+## D-J-004 오류 신고·보충 이론은 mingyu_app 새 테이블 2개로 저장한다 (2026-10-06)
+- 배경: 오류 신고 저장 위치로 `query_logs.metadata`나 `query_logs` jsonb 컬럼을 검토했으나 민규 의견으로 별도 테이블로 정했다. 이유: (1) 배열은 "신고 많은 답변 상위 N개"·"주간 신고 수" 집계와 신고 1건만 처리 완료하기가 번거롭고 동시 기록 시 덮일 수 있다. (2) `query_logs`는 로그 테이블이라 오래된 로그를 정리하면 신고도 지워진다. (3) 1과목 재적재 예정이라 근거가 청크 id로만 남으면 다른 내용을 가리킨다.
+- 확인(코드, 2026-10-06): `qa/service.py`의 기록은 `retrieved_theory_ids`(청크 id 목록)와 `metadata.evidence`(n, chunk_id, page, vector_score, rerank_score, cited)뿐이고 책 제목·제목 경로·원문은 남지 않는다.
+- 결정:
+  - `answer_reports`: query_log_id(FK → query_logs, **ON DELETE SET NULL**), 질문·답 스냅샷, report_type(프론트 오류 신고 값 6개 + 새 `missing_concept`), concept_details, detail, **evidence_snapshot**(신고 시점에 청크를 조회해 책 제목·경로·원문까지 복사, 청크가 없으면 화면이 보낸 evidence), status(open/resolved), resolved_at. 한 답변의 여러 신고는 행을 쌓는다.
+  - `supplements`: 보충 이론(텍스트/이미지/PDF)을 **검토 대기(pending_review)** 로 저장하고 임베딩하지 않는다. report_id(오류 신고 안 첨부) 또는 source=unanswerable("확인 불가" 버튼). 텍스트는 본문, 파일은 저장소 `supplements/{id}.{확장자}` URI. 팀 규격 `books`/`pages`에 넣는 방안은 자료 유형 CHECK(`user_supplement` 없음)과 팀 규격 데이터 수정 문제로 택하지 않았다.
+  - 마이그레이션 파일·PR은 재원, DB 적용은 머지 후 민규(공유 DB 적용 순서 관리).
+- 프론트 요청(수지, PR #4 화면): 오류 신고 시 `query_log_id`와 `evidence` 전송, 유형 `missing_concept`("관련 개념이 부족해요") 추가, 신고 안 보충 이론 첨부와 "확인 불가" 답변의 [이론 보충하기]가 같은 입력 UI로 `POST /supplements` 호출.
+- 남은 것: 보충 이론 승인 → 추출·청킹·임베딩(적재 코드 담당과 협의), 관리 화면 검수 목록.

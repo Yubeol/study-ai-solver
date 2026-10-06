@@ -98,3 +98,20 @@ export function ask(question: string): Promise<QaResponse> {
     QA_TIMEOUT_SECONDS,
   )
 }
+
+export type OcrResponse = {
+  text: string
+  engine: 'google_vision' | 'gemini' | 'paddleocr'
+  model: string | null
+  problem_text: string
+  choices: string[]
+  figure_description: string
+  fallback_reason: 'vision_not_configured' | 'vision_failed' | 'llm_not_configured' | 'llm_failed' | null
+}
+
+// 문제 사진 → 문제 텍스트(POST /ocr). Google Vision(기본)·Gemini, 실패하면 PaddleOCR(첫 호출은 모델 로드로 느림).
+export function ocr(file: File): Promise<OcrResponse> {
+  const body = new FormData()
+  body.append('file', file)
+  return request<OcrResponse>('/ocr', { method: 'POST', body }, QA_TIMEOUT_SECONDS)
+}

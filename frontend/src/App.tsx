@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import type { QaResponse } from './api'
+import { ApiError, ask, type QaResponse } from './api'
 
 import AnswerView from './components/AnswerView'
 import CitationList from './components/CitationList'
@@ -10,10 +10,11 @@ import QuestionForm from './components/QuestionForm'
 import ReportDrawer from './components/ReportDrawer'
 import Sidebar, { type Menu } from './components/Sidebar'
 
+// 백엔드 없이 화면만 볼 때는 frontend/.env에 VITE_USE_MOCK=true를 넣으면 아래 임시 데이터를 쓴다.
+const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
+
 /*
-  프론트 디자인 확인용 임시 데이터입니다.
-  백엔드 연결이 완료되면 이 mockResult를 삭제하고
-  실제 /qa 응답을 사용하면 됩니다.
+  프론트 디자인 확인용 임시 데이터입니다(VITE_USE_MOCK=true일 때만 사용).
 */
 const mockResult: QaResponse = {
   question: '다음 중 데이터 마이닝의 특징으로 옳지 않은 것은?',
@@ -112,25 +113,32 @@ export default function App() {
   const [lastQuestion, setLastQuestion] =
       useState('')
 
-  /*
-    지금은 백엔드를 호출하지 않습니다.
-
-    문제 풀기 버튼을 누르면
-    위에서 만든 mockResult를 보여줍니다.
-  */
-  const onSubmit = (question: string) => {
+  // 문제 풀기: 실제 /qa 호출(VITE_USE_MOCK=true면 임시 데이터)
+  const onSubmit = async (question: string) => {
     setLoading(true)
     setError(null)
+    setResult(null)
     setLastQuestion(question)
 
-    setTimeout(() => {
-      setResult({
-        ...mockResult,
-        question,
-      })
+    if (USE_MOCK) {
+      setTimeout(() => {
+        setResult({
+          ...mockResult,
+          question,
+        })
 
+        setLoading(false)
+      }, 700)
+      return
+    }
+
+    try {
+      setResult(await ask(question))
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : '알 수 없는 오류가 발생했습니다.')
+    } finally {
       setLoading(false)
-    }, 700)
+    }
   }
 
   return (

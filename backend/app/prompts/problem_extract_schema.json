@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "properties": {
+    "found": {
+      "type": "boolean",
+      "description": "사진에 시험 문제가 있으면 true"
+    },
+    "problem_text": {
+      "type": "string",
+      "description": "문제 번호를 뺀 문제 문장(지문 포함)"
+    },
+    "choices": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "선택지 내용(번호 기호 제외), 순서대로"
+    },
+    "figure_description": {
+      "type": "string",
+      "description": "그래프·표·그림 내용을 글로 설명, 없으면 빈 문자열"
+    }
+  },
+  "required": [
+    "found",
+    "problem_text",
+    "choices",
+    "figure_description"
+  ]
+}

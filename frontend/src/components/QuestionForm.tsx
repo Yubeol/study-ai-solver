@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
+import { ApiError, ocr } from '../api'
+
 type Props = {
   loading: boolean
   onSubmit: (question: string) => void
@@ -9,6 +11,8 @@ export default function QuestionForm({ loading, onSubmit }: Props) {
   const [question, setQuestion] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [preview, setPreview] = useState<string | null>(null)
+  const [ocrLoading, setOcrLoading] = useState(false)
+  const [ocrError, setOcrError] = useState<string | null>(null)
 
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -35,7 +39,8 @@ export default function QuestionForm({ loading, onSubmit }: Props) {
     }
   }
 
-  const handleImage = (file?: File) => {
+  // 사진을 고르면 /ocr로 보내 추출한 문제를 아래 입력칸에 채운다(사용자가 고친 뒤 문제 풀기).
+  const handleImage = async (file?: File) => {
     if (!file) return
 
     if (preview) {
@@ -43,15 +48,21 @@ export default function QuestionForm({ loading, onSubmit }: Props) {
     }
 
     setPreview(URL.createObjectURL(file))
+    setOcrError(null)
+    setOcrLoading(true)
 
-    /*
-      TODO:
-      OCR API가 생기면 여기에서 이미지 파일을 백엔드로 보내고,
-      반환받은 OCR 문자열을 setQuestion(ocrText) 하면 됨.
+    try {
+      const result = await ocr(file)
+      setQuestion(result.text)
 
-      현재 팀 api.ts에는 이미지 OCR 엔드포인트가 없으므로
-      지금은 이미지 미리보기까지만 처리한다.
-    */
+      if (!result.text) {
+        setOcrError('사진에서 글자를 찾지 못했어요. 문제를 직접 입력해주세요.')
+      }
+    } catch (e) {
+      setOcrError(e instanceof ApiError ? e.message : '문제를 읽지 못했어요.')
+    } finally {
+      setOcrLoading(false)
+    }
   }
 
   return (
@@ -135,8 +146,19 @@ export default function QuestionForm({ loading, onSubmit }: Props) {
               <span className="card-description">
               OCR 결과를 확인하고 잘못된 부분은 직접 수정할 수 있어요.
             </span>
+              {ocrLoading && (
+                  <span className="loading-text">
+                사진에서 문제를 읽는 중… (처음엔 1분쯤 걸려요)
+              </span>
+              )}
             </div>
           </div>
+
+          {ocrError && (
+              <div className="notice error">
+                {ocrError}
+              </div>
+          )}
 
           <textarea
               value={question}
@@ -172,7 +194,7 @@ export default function QuestionForm({ loading, onSubmit }: Props) {
                 type="button"
                 className="solve-button"
                 onClick={submit}
-                disabled={loading || !question.trim()}
+                disabled={loading || ocrLoading || !question.trim()}
             >
               {loading ? '분석 중…' : '문제 풀기'}
             </button>

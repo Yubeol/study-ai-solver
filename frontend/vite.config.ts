@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         '/qa': target,
+        '/ocr': target,
         '/subjects': target,
       },
     },
