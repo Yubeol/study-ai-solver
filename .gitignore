@@ -22,3 +22,15 @@ frontend/dist/
 # 로컬 데이터 / 산출물
 data/
 *.log
+
+# 안전망: 교재 원문이 들어 있는 추출 결과·비공개 평가 파일
+*.ocr.json
+*.text.json
+eval/private/
+
+# 개인 파일 (각자 로컬에만 둔다)
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/commands/
+docs/PROGRESS.md
+docs/sessions/
