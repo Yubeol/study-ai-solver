@@ -5,38 +5,57 @@ type Props = {
     onChange: (menu: Menu) => void
 }
 
-export default function Sidebar({ current, onChange }: Props) {
+export default function Sidebar({
+                                    current,
+                                    onChange,
+                                }: Props) {
     return (
         <aside className="sidebar">
-            <div className="brand">
+            <div className="sidebar-logo">
                 <strong>문제풀다</strong>
                 <span>찍기만 하면, 해설까지.</span>
             </div>
 
-            <nav className="sidebar-nav">
+            <nav className="sidebar-menu">
                 <button
-                    className={current === 'home' ? 'active' : ''}
+                    className={
+                        current === 'home'
+                            ? 'sidebar-menu-item active'
+                            : 'sidebar-menu-item'
+                    }
                     onClick={() => onChange('home')}
                 >
-                    홈
+                    문제 풀기
                 </button>
 
                 <button
-                    className={current === 'favorites' ? 'active' : ''}
+                    className={
+                        current === 'favorites'
+                            ? 'sidebar-menu-item active'
+                            : 'sidebar-menu-item'
+                    }
                     onClick={() => onChange('favorites')}
                 >
                     즐겨찾기
                 </button>
 
                 <button
-                    className={current === 'knowledge' ? 'active' : ''}
+                    className={
+                        current === 'knowledge'
+                            ? 'sidebar-menu-item active'
+                            : 'sidebar-menu-item'
+                    }
                     onClick={() => onChange('knowledge')}
                 >
                     자료 관리
                 </button>
 
                 <button
-                    className={current === 'settings' ? 'active' : ''}
+                    className={
+                        current === 'settings'
+                            ? 'sidebar-menu-item active'
+                            : 'sidebar-menu-item'
+                    }
                     onClick={() => onChange('settings')}
                 >
                     설정
