@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     answerable_confident_rerank_score: float = Field(default=0.15, ge=0, le=1)
 
     # 검색 평가 (ARCHITECTURE "검색 평가")
-    eval_questions_path: Path = Field(default=Path("data/eval/questions.csv"))  # 상대경로면 저장소 루트 기준
+    eval_questions_path: Path = Field(default=Path("eval/questions.csv"))  # 상대경로면 저장소 루트 기준
     eval_rank_depth: int = Field(default=20, gt=0)  # 정답 순위를 찾을 깊이(K보다 작으면 K)
     eval_thresholds: str = "0.40,0.45,0.50,0.55,0.60"  # "확인 불가" 1위 점수 임계값 후보(쉼표 구분)
     eval_rerank_thresholds: str = "0.01,0.05,0.1,0.15,0.2,0.3,0.5,0.7"  # 리랭커 1위 점수 임계값 후보
