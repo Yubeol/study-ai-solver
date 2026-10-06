@@ -16,6 +16,8 @@ ADsP 교재를 근거로 질문에 답하는 시험공부용 RAG입니다. 질�
   ```powershell
   uv sync
   ```
+  - torch는 PyTorch CPU 인덱스에서 CPU 빌드로 설치됩니다(GPU 미사용, D-M-031).
+  - `pyproject.toml`·`uv.lock`이 바뀐 PR을 받은 뒤에는 `uv sync`를 다시 실행하세요.
 - **Node.js 22.12 이상**(Vite 8): `cd frontend; npm ci`
 - **모델 캐시**(처음 실행 시 자동 다운로드, 위치는 `.env`):
   - 임베딩(BAAI/bge-m3) + 리랭커(BAAI/bge-reranker-v2-m3): 약 8.5GB → `EMBEDDING_MODEL_DIR`

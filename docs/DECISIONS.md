@@ -309,7 +309,7 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - A. 서비스 스키마는 mingyu·mingyu_app 유지. 데이터 담당 결과물은 DB가 아니라 공통 JSON 파일로 받는다. 각자 실험용 스키마는 본인만, 서비스 스키마 변경은 `backend/migrations/` 번호 파일 + PR + 팀 공지, 재적재·DDL 적용은 민규만. DB 서버는 보안 그룹으로 팀원 IP만 허용(민규가 AWS에서 설정).
   - B. PROGRESS·sessions는 추적 해제만(기록은 이전 커밋에 남음). README에 "현재 상태" 5줄 요약, 남은 작업은 GitHub Issues(웹에서 직접 생성).
   - C. 평가 질문 33문항은 `eval/questions.csv`로 커밋(직접 쓴 질문 + 쪽번호). 커밋 전 정답 표시가 쪽번호 기준인지 확인. 기출 원문은 커밋하지 않는다.
-  - D. CI의 torch는 정리 PR 머지 직후 별도 PR로 pytorch-cpu 인덱스 적용(확인 2026-10-01, https://docs.astral.sh/uv/guides/integration/pytorch/ — `[tool.uv.sources]` + `[[tool.uv.index]] name="pytorch-cpu" url="https://download.pytorch.org/whl/cpu" explicit=true`). `uv.lock`이 바뀌므로 Windows 로컬 재설치와 실제 모델 테스트로 확인.
+  - D. CI의 torch는 정리 PR 머지 직후 별도 PR로 pytorch-cpu 인덱스 적용(확인 2026-10-01, https://docs.astral.sh/uv/guides/integration/pytorch/ — `[tool.uv.sources]` + `[[tool.uv.index]] name="pytorch-cpu" url="https://download.pytorch.org/whl/cpu" explicit=true`). `uv.lock`이 바뀌므로 Windows 로컬 재설치와 실제 모델 테스트로 확인. → **D-M-031에서 적용**
   - main 보호: 무료 비공개 저장소는 보호된 브랜치를 쓸 수 없다(사용자 확인, GitHub 문서 "About protected branches" https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches — 이 세션의 문서 조회에서는 해당 문장을 직접 찾지 못함) → README에 팀 약속 "main 직접 push 금지, PR + CI 통과 후 머지".
 - CLAUDE.md 분리: 팀 규칙은 `CLAUDE.md`(커밋), 개인 지침(세션 시작·완료 루틴, /start·/wrap, 개인 경로)은 `CLAUDE.local.md`(gitignore). 공식 문서 확인 2026-10-01: "For private per-project preferences that shouldn't be checked into version control, create a `CLAUDE.local.md` at the project root. It loads alongside `CLAUDE.md`… Add `CLAUDE.local.md` to your `.gitignore`" (https://code.claude.com/docs/en/memory).
 - CI에서는 실제 모델 테스트(addopts로 제외)와 DB 테스트(닿지 않는 가짜 DB 값 → 건너뜀)를 돌리지 않는다. 공유 DB 정보는 GitHub Secrets에 넣지 않고 DB 테스트는 PR 전 로컬에서 돌린다.
@@ -318,3 +318,19 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 결정 번호를 이니셜 체계로 바꿨다(이 항목 D-030 → D-M-030, 규칙은 문서 맨 위). 팀 문서 `docs/team/` → `docs/guides/`, 새 README·`docs/API.md`·`eval/questions.csv`(정답 표시가 인쇄 쪽번호 기준임을 `evaluate.py`의 printed_page_number 비교로 확인), `EVAL_QUESTIONS_PATH` 기본값 `eval/questions.csv`.
   - DB 없는 조건의 테스트: `test_pool_connection_does_not_leak_search_path`는 `db_conn` fixture를 받아 건너뛰고, `test_qa_api`는 `get_conn`을 가짜 커넥션으로 바꿔 DB 없이도 실행한다(검색·기록이 이미 가짜). 가짜 DB 값으로 107 통과 / 20 건너뜀 / 실패 0, 로컬 DB로 127 통과.
   - CI `.github/workflows/ci.yml`: backend(ubuntu, `astral-sh/setup-uv@v10` Python 3.12, `uv sync --locked`, `uv run pytest`, 가짜 DB 값·`JUDGE_PROVIDER=none`·`PRELOAD_MODELS=false`) / frontend(`actions/setup-node@v7` Node 24, `npm ci`·lint·build). 액션 버전은 GitHub API 최신 릴리스로 확인(2026-10-06: actions/checkout v7.0.1 https://github.com/actions/checkout/releases, astral-sh/setup-uv v10.2.0 https://github.com/astral-sh/setup-uv/releases, actions/setup-node v7.0.0 https://github.com/actions/setup-node/releases). torch CPU 인덱스는 D 결정대로 다음 PR — 그 전까지 백엔드 CI가 CUDA torch로 느리거나 실패할 수 있다(사용자 결정: 원인이 이것이면 머지 가능).
+
+
+## D-M-031 torch는 PyTorch CPU 인덱스에서 받는다 (2026-10-06, `chore/torch-cpu-index`)
+- 배경: torch는 `sentence-transformers==6.1.0`을 통한 간접 의존이었고, `uv.lock`은 PyPI의 torch 2.14.0을 가리켰다. PyPI Linux 휠은 CUDA 빌드라 Linux(CI 포함)에서 `nvidia-*` 16개·`triton`·`cuda-*` 3개, 합계 19개(Linux x86_64 약 2.45GB, torch 휠 555MB 별도)가 함께 설치됐다. 이 서비스는 임베딩·리랭커를 CPU로 돌린다(`EMBEDDING_DEVICE`·`RERANKER_DEVICE` 기본 cpu). Windows PyPI 휠은 원래 CPU 빌드(`2.14.0+cpu`)라 로컬에는 차이가 없었다. CI backend의 `uv sync --locked`는 36~70초가 걸렸다(그중 다운로드·준비 33초, uv 캐시는 prune돼 매번 새로 받음).
+- 결정: `pyproject.toml`에 `torch==2.14.0`을 직접 의존으로 추가하고, `[tool.uv.sources] torch = [{ index = "pytorch-cpu" }]` + `[[tool.uv.index]] name = "pytorch-cpu"`, `url = "https://download.pytorch.org/whl/cpu"`, `explicit = true`로 둔다. `explicit`이라 torch만 이 인덱스에서 받고 나머지는 PyPI에서 받는다. torch 버전은 그대로 2.14.0.
+- 출처(확인 2026-10-06): uv PyTorch 연동 문서 https://docs.astral.sh/uv/guides/integration/pytorch/ (CPU 전용 예시, "macOS는 PyPI로"는 CUDA 인덱스를 쓸 때의 안내), CPU 인덱스 휠 목록 https://download.pytorch.org/whl/cpu/torch/ (2.14.0 cp312: win_amd64·win_arm64·manylinux x86_64/aarch64·s390x는 `+cpu`, macosx_14_0_arm64는 `2.14.0`). macOS arm64 휠도 CPU 인덱스에 있으므로 marker로 플랫폼을 나누지 않는다. uv 문서에서 source가 간접 의존에도 적용되는지는 확인하지 못해, 공식 예시처럼 직접 의존으로 추가했다.
+- 대안:
+  - PyPI 유지: Linux·CI에서 쓰지 않는 CUDA 패키지 약 2.7GB를 계속 받는다.
+  - Linux에만 marker로 CPU 인덱스 적용: 결과는 거의 같지만 설정만 복잡해진다(macOS도 CPU 인덱스에 휠이 있음).
+  - CUDA 인덱스 사용: GPU 서버 계획이 없어 필요 없다.
+- 결과(`uv lock`): `cuda-bindings`·`cuda-pathfinder`·`cuda-toolkit`·`nvidia-*` 16개·`triton` 제거(패키지 이름 127 → 108개, torch 항목이 2개라 lock 항목은 109개). torch는 `2.14.0+cpu`(Windows·Linux) + `2.14.0`(macOS) 두 항목으로 나뉘고, 출처는 둘 다 `https://download.pytorch.org/whl/cpu`. 다른 패키지 버전 변경 없음. 로컬 Windows는 `torch 2.14.0+cpu`, `cuda.is_available() False`. 같은 질문의 bge-m3 임베딩(코사인 1.0, 최대 차이 0)과 리랭커 점수 4개(차이 0)가 변경 전과 같다. 기본 pytest 127 통과, 실제 모델 테스트 3개(임베딩·리랭커·OCR) 통과.
+- 영향:
+  - 팀원은 머지 후 `uv sync`를 한 번 실행한다(`uv run`도 자동으로 동기화한다). Windows는 torch만 다시 받는다(약 118MB). 모델 캐시(`EMBEDDING_MODEL_DIR`)는 그대로 쓴다.
+  - Linux에서 NVIDIA GPU가 있어도 CUDA를 쓸 수 없다(지금 설정은 CPU라 기능 영향 없음). GPU가 필요해지면 CUDA 인덱스를 marker로 추가하는 결정을 새로 한다.
+  - Intel Mac(x86_64)은 torch 2.14.0 휠이 PyPI·CPU 인덱스 모두에 없다(이번 변경 전에도 같음).
+  - torch를 직접 의존(==2.14.0)으로 고정했으므로, sentence-transformers 등 torch를 쓰는 패키지를 올릴 때는 torch 버전도 함께 확인·조정할 것.
