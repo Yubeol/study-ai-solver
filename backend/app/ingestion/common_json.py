@@ -23,6 +23,7 @@ from app.core.config import Settings
 
 BLOCK_TYPES = ("theory", "table", "visual")  # formula·code는 DB CHECK에는 있지만 적재 규칙이 아직 없어 오류로 멈춘다
 BLOCK_ROLES = ("content", "learning_objective")
+CORPUS = "common_json"  # documents.corpus 값(검색 대상 SEARCH_CORPUS의 common_json과 같은 이름)
 BLOCKS_FORMAT = "adsp_common_json"
 RELATIONS_FORMAT = "adsp_common_relations"
 EXCLUDE_DUPLICATE = "duplicate_of_table"
@@ -500,14 +501,20 @@ def linearize_table(table: dict) -> str:
     return "\n".join(lines)
 
 
-def embedding_text(b: dict) -> str:
+def embedding_text(b: dict, *, with_path: bool = True) -> str:
+    """블록 → 텍스트. 기본(with_path=True)은 적재 때 저장하는 임베딩 텍스트(바꾸면 재임베딩).
+
+    with_path=False는 맨 앞 제목 경로만 뺀다. 질의 때 LLM·판정기에 넘기는 근거 본문으로 쓴다(D-M-033,
+    제목 경로는 프롬프트에 따로 들어감). b는 원본 블록 또는 block_from_row(DB 행).
+    """
     path = TITLE_PATH_SEP.join(one_line(x) for x in b["title_path"])
     btype = b["block_type"]
     if btype == "theory":
-        return f"{path}\n\n{b['clean_text'].strip()}"
+        return f"{path}\n\n{b['clean_text'].strip()}" if with_path else b["clean_text"].strip()
+    head = f"{path}\n" if with_path else ""
     if btype == "table":
-        return f"{path}\n[표] {one_line(b['title'])}\n{linearize_table(b['table'])}"
-    parts = [f"{path}\n[그림] {one_line(b['title'])}"]
+        return f"{head}[표] {one_line(b['title'])}\n{linearize_table(b['table'])}"
+    parts = [f"{head}[그림] {one_line(b['title'])}"]
     if _is_str(b.get("visual_description")):
         parts.append(f"설명: {b['visual_description'].strip()}")
     if _is_str(b.get("visual_structure")):
@@ -516,6 +523,19 @@ def embedding_text(b: dict) -> str:
     if words:
         parts.append("그림 속 글자: " + " · ".join(words))
     return "\n".join(parts)
+
+
+def block_from_row(row: dict) -> dict:
+    """blocks 테이블 행 → embedding_text 입력(원본 블록과 같은 키). 표는 table_data, 그림 필드는 visual_data에 있다."""
+    return {
+        "block_type": row["block_type"],
+        "title": row["title"],
+        "title_path": row["title_path"],
+        "clean_text": row["clean_text"],
+        "raw_text": row["raw_text"],
+        "table": row.get("table_data"),
+        **(row.get("visual_data") or {}),
+    }
 
 
 # ----- 적재 계획 (DB 상태와 비교) -----
