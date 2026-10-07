@@ -10,7 +10,7 @@ from uuid import UUID
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from app.api.deps import get_conn, get_settings
 from app.core.config import Settings
@@ -44,7 +44,8 @@ class EvidenceIn(BaseModel):
 
 class ReportCreate(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    type: ReportType
+    # 프론트(ReportDrawer)는 report_type으로 보낸다. 둘 다 받는다(D-J-004).
+    type: ReportType = Field(validation_alias=AliasChoices("type", "report_type"))
     concept_details: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(default=[], max_length=10)
     detail: str = Field(default="", max_length=500)
     query_log_id: UUID | None = Field(default=None, description="/qa 응답의 query_log_id(있으면 답·근거를 기록에서 가져옴)")

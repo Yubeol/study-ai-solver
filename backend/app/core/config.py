@@ -138,6 +138,10 @@ class Settings(BaseSettings):
     team_import_jpeg_quality: int = Field(default=92, ge=1, le=100)
     team_import_preview_dpi: int = Field(default=14, gt=0)  # 쪽번호 대조용 저해상도 미리보기
     reports_dir: Path = Field(default=Path("data/reports"))  # dry-run 계획·미리보기 출력
+    # /qa 응답 visuals(D-J-005): 공통 JSON(*_blocks.json, *_relations.json) 폴더. 없으면 visuals는 빈 목록
+    common_json_dir: Path = Field(default=Path("data/common_json"))
+    visuals_min_confidence: float = Field(default=0.8, ge=0, le=1)  # 이론↔표·그림 연결 신뢰도 하한
+    visuals_max: int = Field(default=3, ge=0)  # 답변 하나에 붙이는 표·그림 최대 개수(0이면 끔)
 
     # 이론 청킹 (D-019). 글자 수 기준(공백 포함). 청크는 페이지를 넘지 않는다.
     chunk_max_chars: int = Field(default=800, gt=0)  # 청크 clean_text 최대 길이(문단 하나가 더 길면 자르지 않음)
@@ -187,6 +191,10 @@ class Settings(BaseSettings):
     @property
     def reports_path(self) -> Path:
         return _from_root(self.reports_dir)
+
+    @property
+    def common_json_path(self) -> Path:
+        return _from_root(self.common_json_dir)
 
     @property
     def eval_questions_file(self) -> Path:

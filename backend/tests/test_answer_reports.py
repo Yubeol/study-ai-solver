@@ -15,7 +15,7 @@ from psycopg import sql
 
 from app.api.answer_reports import build_snapshot
 from app.api.deps import get_conn, get_storage
-from app.api.supplements import pdf_page_count
+from app.api.supplements import infer_kind, pdf_page_count
 from app.main import create_app
 from app.storage.local import LocalStorage
 
@@ -69,6 +69,21 @@ def test_report_validation(patch):
         assert client.post("/answer-reports", json=REPORT | patch).status_code == 422
 
 
+def test_report_accepts_frontend_field_name():
+    """프론트는 type 대신 report_type으로 보낸다. 값 검증은 같다."""
+    body = {k: v for k, v in REPORT.items() if k != "type"}
+    with _no_db_client() as client:
+        assert client.post("/answer-reports", json=body | {"report_type": "nope"}).status_code == 422
+        assert client.post("/answer-reports", json=body).status_code == 422  # 둘 다 없음
+
+
+def test_infer_kind():
+    assert infer_kind(None, "자료.pdf", b"anything") == "pdf"
+    assert infer_kind(None, "scan", b"%PDF-1.7 ...") == "pdf"
+    assert infer_kind(None, "a.png", b"\x89PNG") == "image"
+    assert infer_kind("내용", None, b"") == "text"
+
+
 def test_report_list_and_patch_validation():
     with _no_db_client() as client:
         assert client.get("/answer-reports", params={"status": "nope"}).status_code == 422
@@ -114,6 +129,10 @@ def test_pdf_page_count():
         ({"source": "report", "kind": "pdf"}, {"file": ("a.pdf", b"not pdf", "application/pdf")}, 400),
         ({"source": "elsewhere", "kind": "text", "content": "x"}, None, 422),
         ({"source": "report", "kind": "video", "content": "x"}, None, 422),
+        ({"source": "report"}, None, 400),  # kind 생략 + 내용·파일 없음
+        ({"source": "report", "text": "  "}, None, 400),  # 프론트 이름(text), 빈 내용
+        ({"source": "report"}, {"file": ("a.txt", b"hello", "text/plain")}, 400),  # kind 생략 → image로 보고 검증 실패
+        ({"source": "report"}, {"file": ("a.pdf", b"not pdf", "application/pdf")}, 400),  # kind 생략 → pdf
     ],
 )
 def test_supplement_validation(tmp_path, form, files, code):
@@ -174,7 +193,9 @@ def test_report_create_list_resolve(tables, tmp_path):
         assert first["status"] == "open" and first["resolved_at"] is None
         assert first["evidence_snapshot"][0]["source"] == "client"
 
-        r = client.post("/answer-reports", json=REPORT | {"type": "missing_concept"})
+        front = {k: v for k, v in REPORT.items() if k != "type"} | {"report_type": "missing_concept", "explanation": "무시됨"}
+        r = client.post("/answer-reports", json=front)  # 프론트 payload 이름
+        assert r.status_code == 201 and r.json()["report_type"] == "missing_concept"
         second = r.json()
         tables["reports"].append(UUID(second["id"]))
 
@@ -214,11 +235,16 @@ def test_supplements_saved_as_pending(tables, tmp_path):
         assert image["mime_type"] == "image/png" and image["original_filename"] == "메모.png"
         assert storage.read(f"local://supplements/{image['id']}.png") == _png()
 
-        r = client.post("/supplements", data={"source": "unanswerable", "kind": "pdf"},
+        r = client.post("/supplements", data={"source": "unanswerable"},  # 프론트처럼 kind 생략
                         files={"file": ("자료.pdf", _pdf(2), "application/pdf")})
         pdf = r.json()
         tables["supplements"].append(UUID(pdf["id"]))
-        assert pdf["page_count"] == 2 and pdf["mime_type"] == "application/pdf"
+        assert pdf["kind"] == "pdf" and pdf["page_count"] == 2 and pdf["mime_type"] == "application/pdf"
+
+        r = client.post("/supplements", data={"source": "unanswerable", "text": "프론트 이름으로 보낸 본문"})
+        front_text = r.json()
+        tables["supplements"].append(UUID(front_text["id"]))
+        assert front_text["kind"] == "text" and front_text["content_text"] == "프론트 이름으로 보낸 본문"
 
         pending = [x["id"] for x in client.get("/supplements", params={"status": "pending_review", "limit": 200}).json()]
         assert {text["id"], image["id"], pdf["id"]} <= set(pending)

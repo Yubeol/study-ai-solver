@@ -139,6 +139,7 @@ book 객체:
   "low_confidence": false,
   "low_confidence_reasons": [],
   "mcq_check": null,
+  "computed": false,
   "cited": [1],
   "llm": {"model": "…", "usage": {}, "failed_attempts": [], "citation_check": {}},
   "llm_unanswerable": false,
@@ -148,7 +149,13 @@ book 객체:
   }],
   "citations": ["evidence 중 cited=true인 것"],
   "timings_ms": {"embed_ms": 100, "vector_ms": 400, "rerank_ms": 4000, "llm_ms": 1700, "total_ms": 6300},
-  "query_log_id": "uuid"
+  "query_log_id": "uuid",
+  "visuals": [{
+    "asset_id": "VIS_63_01", "block_id": "S1:VISUAL:VIS_63_01", "kind": "visual",
+    "title": "Digitalization Connection Agency 다이어그램", "concept_name": "…", "subject": 1, "page": 63,
+    "image_url": "https://…/crops/page_0063/VIS_63_01.jpg", "thumbnail_url": "https://…/thumbnails/page_0063/VIS_63_01.jpg",
+    "description": "그림 설명(표는 null)", "linked_evidence": [1, 2], "confidence": 1.0
+  }]
 }
 ```
 
@@ -184,8 +191,10 @@ book 객체:
   `{provider, question_key: "can_answer", input, model, probability, can_answer, confident, thresholds: {can_answer_min, confident_min}, latency_ms, usage, attempts, error}`. `can_answer=false`면 Gemini를 부르지 않고 `unanswerable`.
 - `mcq_check`(객관식으로 보이는 질문에 답한 경우만, 아니면 null):
   `{is_mcq: true, negative, chosen, option_verdicts: {"1": "적절하다" | "적절하지 않다" | "확인되지 않는다" | "알 수 없음", …}, consistent, reasons: ["사람이 읽는 문장"]}`
+- `computed`: 답변 프롬프트 규칙 9(계산 문제)로 근거의 공식에 질문 수치를 대입해 계산한 답이면 true(기록·확인용, 확신 낮음 표시는 하지 않음). 해설(`explanation`)에 공식[n]·대입식·결과가 나옵니다.
 - `llm`·`llm_unanswerable`·`cited`는 개발 확인용입니다. reject 구간이면 `llm`은 null.
 - `query_log_id`: `mingyu_app.query_logs`에 남긴 행 id(기록 실패 시 null).
+- `visuals`(D-J-005): **답변이 인용한 근거(cited)** 의 과목·쪽과 연결된 표·시각자료. 데이터 담당 공통 JSON(`COMMON_JSON_DIR`의 `*_blocks.json`·`*_relations.json`)에서 그 쪽의 이론 블록 → 이론↔표·그림 관계(신뢰도 `VISUALS_MIN_CONFIDENCE` 이상)로 찾고, 신뢰도 높은 순 최대 `VISUALS_MAX`개. `linked_evidence`는 연결된 근거 번호(`evidence[].n`). 공통 JSON이 없거나 연결이 없으면 빈 배열. 화면에서는 그래프를 다시 그리지 않고 원본 crop 이미지 + 설명을 보여 줍니다(D-015). 지금은 DB 청크에 공통 JSON 블록 id가 없어 **쪽 단위**로 맞춥니다.
 
 오류:
 | 코드 | 경우 |
@@ -240,11 +249,11 @@ book 객체:
   "evidence": [{"n": 1, "chunk_id": "uuid", "book_title": "…", "page": "62", "path": "…", "raw_text": "…"}]
 }
 ```
-- `type`: `wrong_answer`(답이 틀림) / `wrong_explanation`(해설이 틀림) / `wrong_concept`(개념·근거가 이상함) / `missing_concept`(관련 개념이 부족함) / `wrong_ocr`(문제를 잘못 읽음) / `insufficient`(설명이 부족함) / `other`
+- `type`(또는 `report_type`, 프론트 이름): `wrong_answer`(답이 틀림) / `wrong_explanation`(해설이 틀림) / `wrong_concept`(개념·근거가 이상함) / `missing_concept`(관련 개념이 부족함) / `wrong_ocr`(문제를 잘못 읽음) / `insufficient`(설명이 부족함) / `other`
 - `question`: 1~2000자. `detail`: 0~500자. `concept_details`: 문자열 최대 10개(각 1~100자)
 - `query_log_id`(권장): `/qa` 응답의 `query_log_id`. 있으면 질문·답·근거를 그 기록에서 가져와 스냅샷으로 남깁니다(없는 id면 422).
 - `evidence`(선택): `/qa` 응답의 `evidence` 그대로. 재적재로 청크가 없어졌거나 `query_log_id`가 없을 때 스냅샷에 씁니다.
-- `answer`(선택): `query_log_id`가 없을 때만 답 스냅샷으로 씁니다.
+- `answer`(선택): `query_log_id`가 없을 때만 답 스냅샷으로 씁니다. 그 밖의 필드(예: `explanation`)는 무시합니다.
 
 응답:
 ```json
@@ -280,9 +289,9 @@ book 객체:
 | 필드 | 필수 | 설명 |
 |---|---|---|
 | `source` | O | `report`(오류 신고 화면 안에서 첨부) / `unanswerable`("확인 불가" 답변의 [이론 보충하기]) |
-| `kind` | O | `text` / `image` / `pdf` |
+| `kind` | | `text` / `image` / `pdf`. 생략하면 자동: 파일이 PDF면 `pdf`, 그 밖의 파일은 `image`, 파일 없이 내용만 있으면 `text` |
 | `title` | | 자료 제목(0~200자) |
-| `content` | kind=text | 이론 내용(`SUPPLEMENT_MAX_TEXT_CHARS`자 이하) |
+| `content`(또는 `text`) | kind=text | 이론 내용(`SUPPLEMENT_MAX_TEXT_CHARS`자 이하). 프론트는 `text`로 보냄 |
 | `file` | kind=image/pdf | 이미지 PNG/JPEG/WEBP 또는 PDF(`MAX_UPLOAD_MB` 이하, PDF는 `SUPPLEMENT_MAX_PDF_PAGES`쪽 이하) |
 | `report_id` | | 오류 신고 안에서 첨부할 때 `POST /answer-reports` 응답의 `id` |
 | `query_log_id` | | `/qa` 응답의 `query_log_id` |

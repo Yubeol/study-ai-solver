@@ -1,5 +1,6 @@
 """보충 이론 등록 API (D-J-004). 오류 신고 안의 첨부와 "확인 불가" 답변의 [이론 보충하기]가 같은 API를 쓴다.
 
+- 프론트 이름도 받는다: 본문 `text`(= `content`), `kind` 생략 시 자동(파일이 PDF면 pdf, 그 밖의 파일은 image, 파일 없으면 text).
 - 텍스트 / 이미지(PNG·JPEG·WEBP) / PDF를 받아 **검토 대기(pending_review)** 로만 저장한다. 임베딩하지 않는다.
 - 텍스트는 DB에 본문을, 이미지·PDF는 저장소(`supplements/{id}.{확장자}`)에 원본을 두고 URI를 저장한다.
 - 승인 → 추출·청킹·임베딩은 이 API 범위 밖이다(적재 코드 담당과 협의 후 별도 작업).
@@ -53,15 +54,26 @@ def _read_upload(file: UploadFile, settings: Settings) -> tuple[str, bytes]:
     return name, data
 
 
+def infer_kind(content: str | None, filename: str | None, data: bytes) -> str:
+    """kind를 생략했을 때: 파일이 있으면 PDF(시그니처·확장자) / 이미지, 없으면 텍스트."""
+    if data:
+        is_pdf = data[:5] == b"%PDF-" or (filename or "").lower().endswith(".pdf")
+        return "pdf" if is_pdf else "image"
+    if content is not None and content.strip():
+        return "text"
+    raise HTTPException(status.HTTP_400_BAD_REQUEST, "보충할 이론 내용을 입력하거나 파일을 선택해 주세요.")
+
+
 @router.post("/supplements", status_code=status.HTTP_201_CREATED)
 def create_supplement(
     conn: Conn,
     settings: SettingsDep,
     storage: StorageDep,
     source: Annotated[Literal["report", "unanswerable"], Form(description="report: 오류 신고 안 / unanswerable: 확인 불가 버튼")],
-    kind: Annotated[Literal["text", "image", "pdf"], Form()],
+    kind: Annotated[Literal["text", "image", "pdf"] | None, Form(description="생략하면 파일 유무·형식으로 정함")] = None,
     title: Annotated[str, Form(max_length=200)] = "",
     content: Annotated[str | None, Form(description="kind=text일 때 본문")] = None,
+    text: Annotated[str | None, Form(description="content와 같음(프론트 이름)")] = None,
     file: Annotated[UploadFile | None, File(description="kind=image(PNG/JPEG/WEBP) 또는 pdf")] = None,
     subject: Annotated[str | None, Form(max_length=100)] = None,
     question: Annotated[str | None, Form(max_length=2000)] = None,
@@ -75,8 +87,12 @@ def create_supplement(
     supplement_id = uuid4()
     content_text = file_uri = name = mime_type = None
     byte_size = page_count = None
+    data = b""
+    if file is not None:
+        name, data = _read_upload(file, settings)
+    kind = kind or infer_kind(content if content is not None else text, name, data)
     if kind == "text":
-        content_text = (content or "").strip()
+        content_text = (content if content is not None else text or "").strip()
         if not content_text:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "보충할 이론 내용을 입력해 주세요.")
         if len(content_text) > settings.supplement_max_text_chars:
@@ -84,7 +100,6 @@ def create_supplement(
     else:
         if file is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "파일을 선택해 주세요.")
-        name, data = _read_upload(file, settings)
         if kind == "image":
             try:
                 ext = inspect_image(data).extension

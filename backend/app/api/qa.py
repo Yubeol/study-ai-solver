@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import get_conn, get_settings
 from app.core.config import Settings
 from app.qa.service import answer_question
+from app.visuals.common_json import visuals_for
 
 router = APIRouter(tags=["qa"])
 
@@ -27,8 +28,11 @@ def ask(
 
     status: answered / unanswerable / error. low_confidence가 true면 "근거 확신 낮음" 표시.
     citations는 답변이 인용한 근거(raw_text = 교재 원문), evidence는 넘긴 근거 전체.
+    visuals는 인용된 근거와 연결된 표·시각자료(공통 JSON, D-J-005). 없으면 빈 목록.
     """
     models = getattr(request.app.state, "qa_models", None)
     if models is None:
         raise HTTPException(503, "질의 모델이 로드되지 않았습니다(PRELOAD_MODELS=false).")
-    return answer_question(conn, settings, models, body.question.strip(), body.k)
+    result = answer_question(conn, settings, models, body.question.strip(), body.k)
+    result["visuals"] = visuals_for(settings, result.get("evidence") or []) if settings.visuals_max else []
+    return result
