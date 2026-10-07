@@ -41,20 +41,20 @@ export type QaResponse = {
   question: string
 
   status:
-      | 'answered'
-      | 'unanswerable'
-      | 'error'
+    | 'answered'
+    | 'unanswerable'
+    | 'error'
 
   confidence:
-      | 'high'
-      | 'low'
-      | 'unanswerable'
-      | null
+    | 'high'
+    | 'low'
+    | 'unanswerable'
+    | null
 
   zone:
-      | 'answer'
-      | 'gray'
-      | 'reject'
+    | 'answer'
+    | 'gray'
+    | 'reject'
 
   zone_reason: string
 
@@ -89,18 +89,31 @@ export type QaResponse = {
 ========================= */
 
 export type AnswerReportType =
-    | 'wrong_answer'
-    | 'wrong_explanation'
-    | 'wrong_concept'
-    | 'missing_concept'
-    | 'wrong_ocr'
-    | 'insufficient'
-    | 'other'
+  | 'wrong_answer'
+  | 'wrong_explanation'
+  | 'wrong_concept'
+  | 'missing_concept'
+  | 'wrong_ocr'
+  | 'insufficient'
+  | 'other'
+
+export type ConceptDetail =
+  | 'unrelated_concept'
+  | 'wrong_location'
+  | 'explanation_mismatch'
+  | 'other'
 
 export type CreateAnswerReportRequest = {
   query_log_id: string | null
 
   report_type: AnswerReportType
+
+  /*
+   * wrong_concept일 때만 값이 들어간다.
+   *
+   * 그 외 신고 유형은 []
+   */
+  concept_details: ConceptDetail[]
 
   detail?: string
 
@@ -122,8 +135,8 @@ export type CreateAnswerReportResponse = {
 ========================= */
 
 export type SupplementSource =
-    | 'report'
-    | 'unanswerable'
+  | 'report'
+  | 'unanswerable'
 
 export type SupplementInput = {
   source: SupplementSource
@@ -146,27 +159,27 @@ export type SupplementInput = {
 export class ApiError extends Error {}
 
 const QA_TIMEOUT_SECONDS =
-    Number(import.meta.env.VITE_QA_TIMEOUT_SECONDS) || 60
+  Number(import.meta.env.VITE_QA_TIMEOUT_SECONDS) || 60
 
 const CONNECTION_ERROR =
-    '서버에 연결할 수 없습니다(백엔드 실행 확인)'
+  '서버에 연결할 수 없습니다(백엔드 실행 확인)'
 
 const TIMEOUT_ERROR =
-    '응답 시간이 초과됐습니다'
+  '응답 시간이 초과됐습니다'
 
 async function request<T>(
-    path: string,
-    init: RequestInit = {},
-    timeoutSeconds?: number,
+  path: string,
+  init: RequestInit = {},
+  timeoutSeconds?: number,
 ): Promise<T> {
   const controller = new AbortController()
 
   const timer = timeoutSeconds
-      ? setTimeout(
-          () => controller.abort(),
-          timeoutSeconds * 1000,
+    ? setTimeout(
+        () => controller.abort(),
+        timeoutSeconds * 1000,
       )
-      : undefined
+    : undefined
 
   let res: Response
 
@@ -177,10 +190,12 @@ async function request<T>(
     })
   } catch (e) {
     throw new ApiError(
-        controller.signal.aborted
-            ? TIMEOUT_ERROR
-            : CONNECTION_ERROR,
-        { cause: e },
+      controller.signal.aborted
+        ? TIMEOUT_ERROR
+        : CONNECTION_ERROR,
+      {
+        cause: e,
+      },
     )
   } finally {
     clearTimeout(timer)
@@ -191,29 +206,33 @@ async function request<T>(
   let data: unknown = null
 
   try {
-    data = body ? JSON.parse(body) : null
+    data = body
+      ? JSON.parse(body)
+      : null
   } catch {
     data = null
   }
 
   if (!res.ok) {
     if (
-        data === null &&
-        res.status >= 500
+      data === null &&
+      res.status >= 500
     ) {
-      throw new ApiError(CONNECTION_ERROR)
+      throw new ApiError(
+        CONNECTION_ERROR,
+      )
     }
 
     const detail = (
-        data as {
-          detail?: unknown
-        } | null
+      data as {
+        detail?: unknown
+      } | null
     )?.detail
 
     throw new ApiError(
-        typeof detail === 'string'
-            ? detail
-            : `요청 실패(HTTP ${res.status})`,
+      typeof detail === 'string'
+        ? detail
+        : `요청 실패(HTTP ${res.status})`,
     )
   }
 
@@ -225,26 +244,29 @@ async function request<T>(
 ========================= */
 
 export function getSubjects(): Promise<string[]> {
-  return request<string[]>('/subjects')
+  return request<string[]>(
+    '/subjects',
+  )
 }
 
 export function ask(
-    question: string,
+  question: string,
 ): Promise<QaResponse> {
   return request<QaResponse>(
-      '/qa',
-      {
-        method: 'POST',
+    '/qa',
+    {
+      method: 'POST',
 
-        headers: {
-          'Content-Type': 'application/json',
-        },
-
-        body: JSON.stringify({
-          question,
-        }),
+      headers: {
+        'Content-Type':
+          'application/json',
       },
-      QA_TIMEOUT_SECONDS,
+
+      body: JSON.stringify({
+        question,
+      }),
+    },
+    QA_TIMEOUT_SECONDS,
   )
 }
 
@@ -253,19 +275,22 @@ export function ask(
 ========================= */
 
 export function createAnswerReport(
-    payload: CreateAnswerReportRequest,
+  payload: CreateAnswerReportRequest,
 ): Promise<CreateAnswerReportResponse> {
   return request<CreateAnswerReportResponse>(
-      '/answer-reports',
-      {
-        method: 'POST',
+    '/answer-reports',
+    {
+      method: 'POST',
 
-        headers: {
-          'Content-Type': 'application/json',
-        },
-
-        body: JSON.stringify(payload),
+      headers: {
+        'Content-Type':
+          'application/json',
       },
+
+      body: JSON.stringify(
+        payload,
+      ),
+    },
   )
 }
 
@@ -274,63 +299,70 @@ export function createAnswerReport(
 ========================= */
 
 export function createSupplement(
-    input: SupplementInput,
+  input: SupplementInput,
 ): Promise<unknown> {
-  const formData = new FormData()
+  const formData =
+    new FormData()
 
   formData.append(
-      'source',
-      input.source,
+    'source',
+    input.source,
   )
 
   if (
-      input.reportId !== undefined &&
-      input.reportId !== null
+    input.reportId !==
+      undefined &&
+    input.reportId !== null
   ) {
     formData.append(
-        'report_id',
-        String(input.reportId),
+      'report_id',
+      String(input.reportId),
     )
   }
 
   if (input.queryLogId) {
     formData.append(
-        'query_log_id',
-        input.queryLogId,
+      'query_log_id',
+      input.queryLogId,
     )
   }
 
-  if (input.title?.trim()) {
+  if (
+    input.title?.trim()
+  ) {
     formData.append(
-        'title',
-        input.title.trim(),
+      'title',
+      input.title.trim(),
     )
   }
 
-  if (input.text?.trim()) {
+  if (
+    input.text?.trim()
+  ) {
     formData.append(
-        'text',
-        input.text.trim(),
+      'text',
+      input.text.trim(),
     )
   }
 
   if (input.file) {
     formData.append(
-        'file',
-        input.file,
+      'file',
+      input.file,
     )
   }
 
   /*
-    FormData를 보낼 때는
-    Content-Type을 직접 지정하지 않는다.
-    브라우저가 boundary를 자동 설정한다.
-  */
+   * FormData를 보낼 때는
+   * Content-Type을 직접 지정하지 않는다.
+   *
+   * 브라우저가 boundary를 자동 설정한다.
+   */
   return request(
-      '/supplements',
-      {
-        method: 'POST',
-        body: formData,
-      },
+    '/supplements',
+    {
+      method: 'POST',
+      body: formData,
+    },
   )
 }
