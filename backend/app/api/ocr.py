@@ -6,9 +6,12 @@
 - gemini(기본): Gemini 비전(구조화 출력)으로 사진에서 문제 1개와 선택지만 옮겨 적는다. 기울어지거나 휜 사진,
   위아래에 걸린 다른 문제, 비친 뒷장 글자를 걸러낸다. 모델은 PROBLEM_EXTRACT_MODEL, 프롬프트는 prompts/problem_extract_*.
 - 대체: 고른 엔진의 키가 없거나 호출이 실패하면 업로드 경로의 인쇄체 PaddleOCR로 읽는다(응답 fallback_reason).
+  Gemini는 PROBLEM_OCR_MAX_RETRIES번만 재시도해 빨리 넘긴다. PaddleOCR까지 실패하면 503(직접 입력 안내).
+- 크기 한도는 PROBLEM_OCR_MAX_UPLOAD_MB(Gemini 인라인 요청 20MB 제한 때문에 업로드 한도보다 작게).
 - 사진은 저장하지 않는다. 결과 텍스트는 사용자가 화면에서 고친 뒤 `/qa`로 보낸다.
 """
 
+import logging
 from pathlib import PurePath
 from typing import Annotated
 
@@ -23,12 +26,14 @@ from app.llm.gemini import GeminiClient, GeminiError
 from app.prompts import load_json, load_text
 from app.vision.google_vision import GoogleVisionClient, VisionError
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["ocr"])
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 _MIME = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
+PADDLE_FAILED_DETAIL = "사진에서 문제를 읽지 못했습니다. 문제를 직접 입력해 주세요."
 
 
 def lines_to_text(lines: list[OcrLine]) -> str:
@@ -70,6 +75,7 @@ def _extract_with_gemini(llm: GeminiClient, settings: Settings, data: bytes, mim
         schema=load_json("problem_extract_schema.json"),
         temperature=settings.problem_extract_temperature,
         images=[(data, mime_type)],
+        max_retries=settings.problem_ocr_max_retries,
     )
     d = r.data
     found = d.get("found") is not False
@@ -110,7 +116,12 @@ def _extract_with_vision(settings: Settings, data: bytes) -> dict:
 
 
 def _extract_with_paddle(settings: Settings, data: bytes, fallback_reason: str) -> dict:
-    result = ocr.get_engine(settings).recognize(decode_bgr(data))
+    """마지막 대체 경로. 여기서도 실패하면(모델 파일 없음 등) 503으로 직접 입력을 안내한다."""
+    try:
+        result = ocr.get_engine(settings).recognize(decode_bgr(data))
+    except Exception as e:  # noqa: BLE001 — PaddleOCR 로드·추론 오류 종류가 다양하다
+        log.warning("PaddleOCR 대체 경로 실패(%s): %s", fallback_reason, type(e).__name__)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, PADDLE_FAILED_DETAIL) from e
     text = lines_to_text(result.lines)
     return {
         "text": text,
@@ -130,10 +141,11 @@ def extract_problem_text(
     settings: SettingsDep,
 ) -> dict:
     name = PurePath(file.filename or "unnamed").name[:255]
-    max_bytes = settings.max_upload_mb * 1024 * 1024
+    limit_mb = settings.problem_ocr_max_upload_mb
+    max_bytes = limit_mb * 1024 * 1024
     data = file.file.read(max_bytes + 1)
     if len(data) > max_bytes:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"{name}: {settings.max_upload_mb}MB를 넘습니다.")
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"{name}: {limit_mb}MB를 넘습니다.")
     try:
         info = inspect_image(data)
         decode_bgr(data)  # 깨진 파일은 외부 API에 보내기 전에 걸러낸다

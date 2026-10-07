@@ -13,7 +13,7 @@ from pydantic import SecretStr
 
 from app.api import ocr as ocr_api
 from app.api.deps import get_settings
-from app.api.ocr import compose_problem, lines_to_text
+from app.api.ocr import PADDLE_FAILED_DETAIL, compose_problem, lines_to_text
 from app.ingestion import ocr
 from app.ingestion.ocr import OcrLine, OcrResult
 from app.llm.gemini import GeminiClient, GeminiError, JsonResult
@@ -53,8 +53,9 @@ class _FakeLlm:
     def models_for(self, tier):
         return [f"model-{tier}"]
 
-    def generate_json(self, models, system, user, schema, temperature, images=None):
-        self.calls.append({"models": models, "system": system, "schema": schema, "images": images})
+    def generate_json(self, models, system, user, schema, temperature, images=None, max_retries=None):
+        self.calls.append({"models": models, "system": system, "schema": schema, "images": images,
+                           "max_retries": max_retries})
         if self.error:
             raise GeminiError("실패", [{"model": models[0], "attempt": 1, "error": "status_503"}])
         return JsonResult(data=self.data, model="gemini-test", usage={})
@@ -215,5 +216,55 @@ def test_vision_empty_result(settings):
     client = GoogleVisionClient(s, transport=_vision_transport({}, httpx.Response(200, json={"responses": [{}]})))
     try:
         assert client.document_text(b"x") == ""
+    finally:
+        client.close()
+
+
+def test_ocr_passes_problem_ocr_max_retries(fake_ocr, settings):
+    """/ocr은 GEMINI_MAX_RETRIES가 아니라 PROBLEM_OCR_MAX_RETRIES로 재시도한다(리뷰 PR #8)."""
+    llm = _FakeLlm({"found": True, "problem_text": "문제", "choices": [], "figure_description": ""})
+    assert _post(llm, settings=settings, problem_ocr_max_retries=1, gemini_max_retries=3).status_code == 200
+    assert llm.calls[0]["max_retries"] == 1
+
+
+class _BrokenEngine:
+    def recognize(self, image):
+        raise FileNotFoundError("model dir")
+
+
+def test_ocr_paddle_failure_returns_503(settings, monkeypatch):
+    monkeypatch.setattr(ocr, "get_engine", lambda s: _BrokenEngine())
+    r = _post(_FakeLlm(error=True), settings=settings)
+    assert r.status_code == 503 and r.json()["detail"] == PADDLE_FAILED_DETAIL
+    monkeypatch.setattr(ocr, "get_engine", lambda s: (_ for _ in ()).throw(RuntimeError("load failed")))
+    assert _post(None, settings=settings).status_code == 503  # 엔진 로드 실패도 같은 처리
+
+
+def test_ocr_uses_problem_ocr_max_upload_mb(fake_ocr, settings):
+    llm = _FakeLlm({"found": True, "problem_text": "", "choices": [], "figure_description": ""})
+    big = b"\x89PNG" + b"0" * (1024 * 1024)
+    r = _post(llm, files={"file": ("big.png", big, "image/png")}, settings=settings,
+              problem_ocr_max_upload_mb=1, max_upload_mb=20)
+    assert r.status_code == 413 and "1MB" in r.json()["detail"]
+    assert llm.calls == [] and fake_ocr.shapes == []
+
+
+def test_gemini_max_retries_per_call(settings):
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(503)
+
+    s = settings.model_copy(update={"gemini_api_key": SecretStr("k"), "gemini_max_retries": 3})
+    client = GeminiClient(s, transport=httpx.MockTransport(handler), sleep=lambda _: None)
+    try:
+        with pytest.raises(GeminiError):
+            client.generate_json(["m"], "sys", "user", {"type": "object"}, 0, max_retries=1)
+        assert len(calls) == 2  # 처음 1번 + 재시도 1번
+        calls.clear()
+        with pytest.raises(GeminiError):
+            client.generate_json(["m"], "sys", "user", {"type": "object"}, 0)
+        assert len(calls) == 4  # 기본값(GEMINI_MAX_RETRIES=3)은 그대로
     finally:
         client.close()

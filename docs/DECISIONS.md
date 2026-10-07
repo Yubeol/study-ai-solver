@@ -389,7 +389,13 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 
 ## D-JW-003 문제 사진 OCR에 Google Cloud Vision 엔진을 추가한다(기본은 gemini) (2026-10-06, 2026-10-07 기본값 변경)
 - 배경: 재원 결정으로 문제 사진 글자 인식은 Google Cloud Vision을 쓴다. Gemini 방식(D-JW-002)은 지우지 않고 `PROBLEM_OCR_ENGINE=gemini`로 고를 수 있게 둔다.
-- 결정: `PROBLEM_OCR_ENGINE`(기본 `google_vision`). Vision은 REST `POST https://vision.googleapis.com/v1/images:annotate`에 `DOCUMENT_TEXT_DETECTION` + `languageHints`(`GOOGLE_VISION_LANGUAGE_HINTS`, 기본 ko)로 보내고 `fullTextAnnotation.text`를 그대로 돌려준다. 키(`GOOGLE_VISION_API_KEY`)는 `x-goog-api-key` 헤더로만 보낸다. 키가 없거나 실패하면 PaddleOCR로 대신 읽는다.
+- 결정: `PROBLEM_OCR_ENGINE`(기본 `gemini`, `google_vision`은 키가 있을 때 선택). Vision은 REST `POST https://vision.googleapis.com/v1/images:annotate`에 `DOCUMENT_TEXT_DETECTION` + `languageHints`(`GOOGLE_VISION_LANGUAGE_HINTS`, 기본 ko)로 보내고 `fullTextAnnotation.text`를 그대로 돌려준다. 키(`GOOGLE_VISION_API_KEY`)는 `x-goog-api-key` 헤더로만 보낸다. 키가 없거나 실패하면 PaddleOCR로 대신 읽는다.
 - 기본값 변경(2026-10-07, PR 전): 처음에는 기본을 `google_vision`으로 했으나 `gemini`로 되돌린다. 팀원 모두 답변용 `GEMINI_API_KEY`가 있고 Vision 키(결제 계정 필요)는 없어서, 기본이 Vision이면 `.env.example`을 복사한 팀원은 매번 PaddleOCR 대체 경로(인식 품질 낮음)로만 돈다. 실제 문제 사진(지니 지수 31번)에서 Gemini가 문제·선택지·그림 설명을 정확히 옮긴 것도 확인했다. Vision은 키를 넣고 `PROBLEM_OCR_ENGINE=google_vision`으로 고른다.
 - 한계: Vision은 사진의 글자를 모두 읽으므로 위아래에 걸린 다른 문제·비친 뒷장 글자가 섞일 수 있다. 문제 1개만 골라내기·선택지 나누기는 하지 않고 사용자가 입력칸에서 고친다.
+- 리뷰 반영(민규, PR #8, 2026-10-07):
+  - 크기: /ocr만 `PROBLEM_OCR_MAX_UPLOAD_MB`(기본 12). Gemini 인라인 요청은 20MB까지라 base64(약 1.33배)를 붙이면 15MB쯤부터 400이 난다. `OCR_*`는 PaddleOCR 설정 접두어라 `PROBLEM_OCR_*`로 맞췄다.
+  - 재시도: /ocr만 `PROBLEM_OCR_MAX_RETRIES`(기본 1). 화면에서 기다리는 요청인데 /qa와 같은 `GEMINI_MAX_RETRIES`(3)면 Gemini 재시도에만 최악 약 4분이 걸린다. `GeminiClient.generate_json`이 호출마다 `max_retries`를 받도록 바꿨고 /qa는 기본값 그대로다. 실패 시 무료 한도(/qa와 공유)도 덜 쓴다.
+  - PaddleOCR까지 실패(모델 파일 없음 등)하면 500 대신 503 + "문제를 직접 입력해 주세요".
+  - 프론트 대기 시간: `VITE_OCR_TIMEOUT_SECONDS`(기본 200초)를 /qa와 따로 둔다. 서버 최악 경로 = Gemini 2번 시도(60초×2 + 대기 2초) + PaddleOCR 첫 로드(약 60초) ≈ 182초. `PROBLEM_EXTRACT_MODEL=strong`이면 strong→lite 폴백까지 시도해 약 300초로 늘어난다.
+  - 화면(QuestionForm, 수지): OCR 중 사진 선택을 막고, 입력칸이 비었거나 직전 OCR 결과 그대로일 때만 결과로 채운다(사용자가 입력·수정한 내용은 덮어쓰지 않음).
 - 확인 2026-10-06: 요청·응답 형식 https://docs.cloud.google.com/vision/docs/ocr , 인증("API key or OAuth token") https://docs.cloud.google.com/vision/docs/request , 가격(기능별 월 1,000단위 무료, 이후 1,000단위당 $1.50, **무료 구간도 결제 계정 필요**) https://cloud.google.com/vision/pricing .
