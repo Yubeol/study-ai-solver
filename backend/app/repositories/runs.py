@@ -5,6 +5,7 @@ from uuid import UUID
 import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from app.core.config import Settings
 
@@ -58,6 +59,14 @@ def finish_run(
     ).format(s=sql.Identifier(settings.db_schema))
     conn.execute(q, (status, success, review, failure, run_id))
     return status
+
+
+def merge_run_metadata(conn: psycopg.Connection, settings: Settings, run_id: UUID, metadata: dict) -> None:
+    """processing_runs.metadata에 키를 덧붙인다(같은 키는 덮어씀)."""
+    q = sql.SQL("UPDATE {s}.processing_runs SET metadata = metadata || %s WHERE id = %s").format(
+        s=sql.Identifier(settings.db_schema)
+    )
+    conn.execute(q, (Jsonb(metadata), run_id))
 
 
 def get_run(conn: psycopg.Connection, settings: Settings, run_id: UUID) -> dict | None:
