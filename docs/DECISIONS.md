@@ -353,7 +353,7 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 데이터 확인 결과(수민님 2과목 최종 동기화본 2026-10-07로 해결): TAB_104_01·TH_104_01은 교재 원본에서 통합 행 문장이 조달 행에 중복 인쇄된 것이라 clean(표 rows·이론 clean_text)에서만 삭제(raw_text는 원문 유지), TH_101_02는 학습목표로 확정되어 duplicate_of_table_id와 관계 BREL_S2_00067 제거(관계 109 → 108), TAB_119_01은 `[구분, 구성요소]` 2열로 수정. 2과목 manifest의 `block_relation_count` 109는 남은 숫자 오타라 무시한다(validation_report는 108, 스크립트는 manifest 개수를 검사하지 않음).
   - 경고만 하고 적재는 진행하는 경우: 학습목표 블록에 duplicate_of_table_id가 있을 때, relation_source=`duplicate_of_table_id` 관계가 블록 필드와 맞지 않을 때(중복 판단은 블록 필드 기준), `COMMON_JSON_PENDING_BLOCK_IDS`(수정본 대기 표시, 지금은 비어 있음)에 든 블록.
   - 임베딩 시간(실측 2026-10-07, CPU, bge-m3, 배치 8): 모델 로드 29초, 블록당 0.72초 → 342블록 약 4분. 모델은 캐시(`E:\hf_models`)에서만 읽도록 설정 `EMBEDDING_OFFLINE=true`(HF_HUB_OFFLINE=1)를 추가했다.
-  - /qa는 이번에 바꾸지 않는다. 검색 대상 전환(`SEARCH_CORPUS`), 1·2과목 범위 비교 실험은 다음 PR, 관계 활용(쪽 넘김 이어짐, 이론↔표·시각자료 붙이기, D-J-005 visuals를 DB 기반으로)은 그다음 PR.
+  - /qa는 이번에 바꾸지 않는다. 검색 대상 전환(`SEARCH_CORPUS`), 1·2과목 범위 비교 실험은 다음 PR, 관계 활용(쪽 넘김 이어짐, 이론↔표·시각자료 붙이기, D-J-005 visuals를 DB 기반으로)은 그다음 PR. → 검색 대상 전환은 **D-M-033**에서 구현.
 - 대안:
   - 팀 규격 테이블 + 새 book: 위 조사의 불일치 때문에 컬럼·CHECK 우회가 많고 적재 즉시 기존 검색에 섞인다.
   - 짧은 블록을 같은 쪽 이웃과 합치기: block_id 단위가 깨진다. 이웃 문맥은 관계 활용 PR에서 근거를 붙이는 방식으로 다룬다.
@@ -375,3 +375,18 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 프론트 요청(수지, PR #4 화면): 오류 신고 시 `query_log_id`와 `evidence` 전송, 유형 `missing_concept`("관련 개념이 부족해요") 추가, 신고 안 보충 이론 첨부와 "확인 불가" 답변의 [이론 보충하기]가 같은 입력 UI로 `POST /supplements` 호출.
 - 프론트 이름에 맞춤(재원 결정, 수지 화면 연동 커밋 12eba19 기준): `/answer-reports`는 `type`과 `report_type`을 모두 받고, `/supplements`는 본문 `content`와 `text`를 모두 받으며 `kind`를 생략하면 파일 유무·형식으로 정한다(PDF 시그니처 `%PDF-` 또는 .pdf → pdf, 그 밖의 파일 → image, 파일 없음 → text). 기존 이름도 계속 받는다.
 - 남은 것: 보충 이론 승인 → 추출·청킹·임베딩(적재 코드 담당과 협의), 관리 화면 검수 목록.
+
+## D-M-033 /qa 검색 대상을 설정값(SEARCH_CORPUS)으로 바꿀 수 있게 하고, mixed는 "공통 JSON이 있는 교재는 블록" 규칙으로 합친다 (2026-10-07, `feat/qa-corpus-switch`)
+- 배경: D-M-032로 1·2과목 공통 JSON 390블록(검색 대상 342)을 적재했지만 /qa·평가·기출 실행은 `v_searchable_theory`(theory_chunks)만 검색했다. 3과목 공통 JSON은 아직 없어 3과목은 theory_chunks를 계속 써야 한다. 재원님 신고 스냅샷(D-JW-004)은 근거 id로 theory_chunks만 조회했고, 프론트(PR #4)는 `/qa` evidence의 `n, chunk_id, book_title, page, path, raw_text, 점수, cited`를 쓴다(raw_text는 문자열로 표시).
+- 조사(읽기만): 표·시각자료 블록 79개는 `clean_text`가 비어 있고 `raw_text`가 문자열 목록이다 → 그대로 넘기면 Gemini·Jev가 빈 근거를 받고 프론트 표시가 깨진다. `documents.book_id`는 1·2과목 모두 같은 교재 book에 연결돼 있다(정답 판정에 그대로 쓸 수 있음). 적재 때 임베딩 텍스트를 만든 함수의 재료는 모두 blocks 컬럼에 남아 있다(390/390 재생성 일치).
+- 결정(사용자 승인 2026-10-07):
+  - 설정 `SEARCH_CORPUS` = `team_text`(기본, 지금과 같음) / `common_json` / `mixed`. 기본값을 바꿀지는 실험 결과를 보고 사용자가 정한다.
+  - **mixed 규칙**: `mingyu_app.documents`에 `corpus='common_json'`으로 연결된 book은 블록에서, 나머지 book은 theory_chunks에서 각각 후보 N개를 가져와 cosine 점수로 합친 뒤 상위 N개만 리랭크한다(같은 bge-m3 정규화 벡터라 점수 척도가 같고, 최종 순서는 리랭커가 정함, 리랭크 시간 그대로). 과목 목록을 설정·코드에 두지 않으므로 **3과목 공통 JSON을 적재하면 mixed의 3과목 검색 대상이 자동으로 블록으로 바뀐다**. 후보 출처 개수는 `candidate_sources`로 기록한다. (대안: 각 N개씩 2N개 리랭크 — 질문당 리랭크 시간 약 2배라 택하지 않음)
+  - 블록의 LLM·Jev용 본문은 `common_json.embedding_text(블록, with_path=False)`: 적재와 같은 함수에 제목 경로 줄만 빼는 인자를 추가했다(기본 출력은 그대로라 재적재 불필요, 단위 테스트로 고정). 임베딩 텍스트 문자열을 잘라 만들지 않는다. 리랭커 입력은 저장된 embedding_text 그대로.
+  - `/qa` evidence는 **필드 추가만**: `corpus, kind, block_id, title, title_path, document_title, thumbnail_url, image_url`. `chunk_id`는 corpus가 team_text면 theory_chunks.id, common_json이면 blocks.id. `raw_text`는 항상 문자열(표·그림 원문 목록은 줄바꿈으로 이음). 이미지 URL은 `ASSET_URL_TEMPLATE`(`{key}`에 저장소 키, 비면 null) — 데이터 안의 완성 URL·버킷 이름은 쓰지 않는다.
+  - query_logs: 팀 규격 `retrieved_theory_ids`에는 **theory_chunks id만**(컬럼 뜻 유지). 블록 근거는 `metadata.retrieved_block_ids`·`metadata.evidence[].block_id`, `metadata.corpus`·`candidate_sources`. `retrieved_visual_ids`(팀 규격 visual_assets용)는 쓰지 않는다. 컬럼·DDL 변경 없음.
+  - 신고 스냅샷은 이 PR에서 고친다(형식을 바꾼 쪽에서 맞춤, 재원님 리뷰 요청): `get_blocks` 추가, `create_report`가 block_id 있는 근거는 blocks에서 조회, `build_snapshot`은 행의 path 우선 + 스냅샷 키에 corpus·kind·block_id, `EvidenceIn`에 같은 선택 필드.
+  - 평가: `evaluate --corpus a,b,c --subjects …`(같은 질문 임베딩·같은 리랭커), 블록 정답 판정도 book_id(documents.book_id) + 인쇄 쪽. 질문별 3구간·1위 근거 종류를 세고 비교표에 hit@k·MRR, 자료 없음·답 가능 질문의 3구간 수, 1위 벡터·리랭커 점수 분포를 함께 낸다. 기출은 `mcq_run run --subjects`, 검색 대상은 서버 `SEARCH_CORPUS`(결과 meta.corpus).
+  - "확인 불가" 기준값(벡터 0.45 / 리랭커 0.03 / 0.15)과 Jev 임계값(0.5 / 0.8)은 이 PR에서 바꾸지 않는다.
+- 범위 밖: 관계 활용(쪽 넘김 이어짐, 이론↔표·시각자료 붙이기)과 visuals(PR3), 프론트 표시(썸네일 등), 기본값 변경.
+- 비교 실험(같은 날·같은 서버 설정, 기출은 이번 team_text 실행을 기준으로 비교, 기존 12/0/2/1과 직접 비교하지 않음): 결과는 실험 후 이 항목과 PR 설명에 추가한다.
