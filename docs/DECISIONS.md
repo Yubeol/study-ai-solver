@@ -375,3 +375,20 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 프론트 요청(수지, PR #4 화면): 오류 신고 시 `query_log_id`와 `evidence` 전송, 유형 `missing_concept`("관련 개념이 부족해요") 추가, 신고 안 보충 이론 첨부와 "확인 불가" 답변의 [이론 보충하기]가 같은 입력 UI로 `POST /supplements` 호출.
 - 프론트 이름에 맞춤(재원 결정, 수지 화면 연동 커밋 12eba19 기준): `/answer-reports`는 `type`과 `report_type`을 모두 받고, `/supplements`는 본문 `content`와 `text`를 모두 받으며 `kind`를 생략하면 파일 유무·형식으로 정한다(PDF 시그니처 `%PDF-` 또는 .pdf → pdf, 그 밖의 파일 → image, 파일 없음 → text). 기존 이름도 계속 받는다.
 - 남은 것: 보충 이론 승인 → 추출·청킹·임베딩(적재 코드 담당과 협의), 관리 화면 검수 목록.
+
+## D-JW-001 문제 사진 OCR API는 프론트 화면 흐름에 맞추고 기존 PaddleOCR을 재사용한다 (2026-10-06)
+- 배경: 프론트 UI PR(`feat/frontend-ui`)의 문제 사진 입력(`QuestionForm`)은 사진 → "추출된 문제" 칸 채우기 → 사용자가 고침 → `/qa` 흐름이고, OCR API가 없어 미리보기까지만 되어 있다.
+- 결정: `POST /ocr`은 문제 사진을 저장하지 않고 텍스트만 돌려준다. 사용자가 텍스트를 고친 뒤 `/qa`로 보내므로, 비전 LLM으로 바로 푸는 `/qa/image` 대신 업로드 경로의 인쇄체 PaddleOCR 엔진을 재사용한다(추가 API 비용·모델 없음, DB 사용 없음).
+- 줄 순서: 세로 중심 기준 위→아래, 같은 높이(앞 줄 높이의 절반 이내)는 왼→오른으로 공백 연결.
+
+## D-JW-002 문제 사진 추출은 Gemini 비전을 기본으로, PaddleOCR은 대체 경로로 (2026-10-06, D-JW-001 일부 변경)
+- 배경: 실제 휴대폰 사진(기울어짐·페이지 휨·뒷장 비침·위아래에 다른 문제)으로 `/ocr`(PaddleOCR)을 시험하니 문제 문장과 ①② 보기를 놓치고, 비친 글자("통H허호…")와 아래 문제 문장을 섞어 읽었다. 이대로 `/qa`에 넣으면 질문 자체가 바뀐다(예: "옳은 것" → "옳지 않은 것").
+- 결정: `/ocr`은 Gemini 비전 구조화 출력(`found`, `problem_text`, `choices`, `figure_description`)으로 가장 온전한 문제 1개만 옮겨 적게 한다. 모델은 `PROBLEM_EXTRACT_MODEL`(기본 lite), 프롬프트는 `backend/app/prompts/problem_extract_*`. 키가 없거나 호출이 실패하면 기존 PaddleOCR로 읽고 `fallback_reason`을 남긴다. PaddleOCR 엔진 설정(`ingestion/ocr.py`)은 교재 업로드와 공유하므로 바꾸지 않는다.
+- 이미지 입력: `GeminiClient.generate_json(..., images=[(바이트, MIME)])` → user 텍스트 파트 뒤에 `inlineData {mimeType, data(base64)}` 파트. 확인 2026-10-06: https://ai.google.dev/api/caching#Part (Part.inlineData / Blob), 요청 전체 20MB 이하·텍스트 다음에 이미지 권장 https://ai.google.dev/gemini-api/docs/image-understanding .
+- 비용·한도: 사진 1장당 Gemini 호출 1회(무료 한도 공유). DB는 쓰지 않는다.
+
+## D-JW-003 문제 사진 OCR 기본 엔진은 Google Cloud Vision (2026-10-06, D-JW-002 기본값 변경)
+- 배경: 재원 결정으로 문제 사진 글자 인식은 Google Cloud Vision을 쓴다. Gemini 방식(D-JW-002)은 지우지 않고 `PROBLEM_OCR_ENGINE=gemini`로 고를 수 있게 둔다.
+- 결정: `PROBLEM_OCR_ENGINE`(기본 `google_vision`). Vision은 REST `POST https://vision.googleapis.com/v1/images:annotate`에 `DOCUMENT_TEXT_DETECTION` + `languageHints`(`GOOGLE_VISION_LANGUAGE_HINTS`, 기본 ko)로 보내고 `fullTextAnnotation.text`를 그대로 돌려준다. 키(`GOOGLE_VISION_API_KEY`)는 `x-goog-api-key` 헤더로만 보낸다. 키가 없거나 실패하면 PaddleOCR로 대신 읽는다.
+- 한계: Vision은 사진의 글자를 모두 읽으므로 위아래에 걸린 다른 문제·비친 뒷장 글자가 섞일 수 있다. 문제 1개만 골라내기·선택지 나누기는 하지 않고 사용자가 입력칸에서 고친다.
+- 확인 2026-10-06: 요청·응답 형식 https://docs.cloud.google.com/vision/docs/ocr , 인증("API key or OAuth token") https://docs.cloud.google.com/vision/docs/request , 가격(기능별 월 1,000단위 무료, 이후 1,000단위당 $1.50, **무료 구간도 결제 계정 필요**) https://cloud.google.com/vision/pricing .

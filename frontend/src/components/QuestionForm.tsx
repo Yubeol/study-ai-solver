@@ -4,6 +4,8 @@ import {
   useState,
 } from 'react'
 
+import { ApiError, ocr } from '../api'
+
 type Props = {
   loading: boolean
   onSubmit: (question: string) => void
@@ -17,6 +19,16 @@ export default function QuestionForm({
     question,
     setQuestion,
   ] = useState('')
+
+  const [
+    ocrLoading,
+    setOcrLoading,
+  ] = useState(false)
+
+  const [
+    ocrError,
+    setOcrError,
+  ] = useState<string | null>(null)
 
   const [
     elapsed,
@@ -68,29 +80,30 @@ export default function QuestionForm({
     }
   }
 
-  const handleImage = (
-      file?: File,
-  ) => {
-    if (!file) {
-      return
-    }
+  // 사진을 고르면 /ocr로 보내 추출한 문제를 아래 입력칸에 채운다(사용자가 고친 뒤 문제 풀기).
+  const handleImage = async (file?: File) => {
+    if (!file) return
 
     if (preview) {
-      URL.revokeObjectURL(
-          preview,
-      )
+      URL.revokeObjectURL(preview)
     }
 
-    setPreview(
-        URL.createObjectURL(
-            file,
-        ),
-    )
+    setPreview(URL.createObjectURL(file))
+    setOcrError(null)
+    setOcrLoading(true)
 
-    /*
-      OCR API 연결 전에는
-      이미지 미리보기만 처리.
-    */
+    try {
+      const result = await ocr(file)
+      setQuestion(result.text)
+
+      if (!result.text) {
+        setOcrError('사진에서 글자를 찾지 못했어요. 문제를 직접 입력해주세요.')
+      }
+    } catch (e) {
+      setOcrError(e instanceof ApiError ? e.message : '문제를 읽지 못했어요.')
+    } finally {
+      setOcrLoading(false)
+    }
   }
 
   return (
@@ -217,8 +230,20 @@ export default function QuestionForm({
                 잘못 인식된 부분은
                 직접 수정할 수 있어요.
               </p>
+
+              {ocrLoading && (
+                  <span className="loading-text">
+                    사진에서 문제를 읽는 중… (처음엔 1분쯤 걸려요)
+                  </span>
+              )}
             </div>
           </div>
+
+          {ocrError && (
+              <div className="notice error">
+                {ocrError}
+              </div>
+          )}
 
           <textarea
               className="question-textarea"
@@ -260,10 +285,7 @@ export default function QuestionForm({
                 type="button"
                 className="primary-button"
                 onClick={submit}
-                disabled={
-                    loading ||
-                    !question.trim()
-                }
+                disabled={loading || ocrLoading || !question.trim()}
             >
               {loading
                   ? '분석 중…'

@@ -5,8 +5,11 @@
 - 429/5xx/시간 초과/JSON 아님 → 같은 모델로 GEMINI_MAX_RETRIES번까지 지수 백오프 재시도.
   그래도 실패하면 다음 모델(폴백)로 넘어간다. 모든 모델이 실패하면 GeminiError.
 - API 키는 헤더(x-goog-api-key)로만 보내고 로그·예외 메시지에 넣지 않는다.
+- 이미지 입력(선택): user 파트 뒤에 `inlineData {mimeType, data(base64)}` 파트로 붙인다
+  (확인 2026-10-06, https://ai.google.dev/api/caching#Part , 요청 전체 20MB 이하 https://ai.google.dev/gemini-api/docs/image-understanding).
 """
 
+import base64
 import json
 import time
 from collections.abc import Callable
@@ -57,10 +60,14 @@ class GeminiClient:
         return out
 
     def generate_json(self, models: list[str], system: str, user: str, schema: dict,
-                      temperature: float) -> JsonResult:
+                      temperature: float, images: list[tuple[bytes, str]] | None = None) -> JsonResult:
+        """images: (바이트, MIME 타입) 목록. 텍스트 다음에 붙인다(문서 권장 순서)."""
+        parts: list[dict] = [{"text": user}]
+        for data, mime_type in images or []:
+            parts.append({"inlineData": {"mimeType": mime_type, "data": base64.b64encode(data).decode("ascii")}})
         body = {
             "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "responseJsonSchema": schema,
