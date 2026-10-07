@@ -334,3 +334,33 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - Linux에서 NVIDIA GPU가 있어도 CUDA를 쓸 수 없다(지금 설정은 CPU라 기능 영향 없음). GPU가 필요해지면 CUDA 인덱스를 marker로 추가하는 결정을 새로 한다.
   - Intel Mac(x86_64)은 torch 2.14.0 휠이 PyPI·CPU 인덱스 모두에 없다(이번 변경 전에도 같음).
   - torch를 직접 의존(==2.14.0)으로 고정했으므로, sentence-transformers 등 torch를 쓰는 패키지를 올릴 때는 torch 버전도 함께 확인·조정할 것.
+
+
+## D-M-032 공통 JSON은 mingyu_app의 새 테이블(documents·blocks·block_relations)에 블록 단위로 적재하고, 기존 데이터와 비교한 뒤 교체한다 (2026-10-07, `feat/common-json-loader`)
+- 배경: 지금 DB의 이론 청크(theory_chunks 616개)는 text.zip(교재 사진 OCR) 기반이라 표 뭉침·그래프 글자 섞임이 있다(2026-10-01 DB 소스 확인). 데이터 담당(수민)이 정제한 공통 JSON 1·2과목 최종본(1과목 163블록 format 1.7, 2과목 227블록 format 1.6, 블록·관계·manifest·validation_report)을 받았다. 바로 바꾸지 않고 따로 넣어 33문항·기출로 비교한 뒤 교체 여부를 정한다.
+- 조사(읽기만):
+  - 블록 종류 theory 311 / table 37 / visual 42. 이론만 `block_role`(content / learning_objective 23)이 있고 표·시각자료는 없다. 일부 블록에만 있는 필드(`subject_name`, `clean_correction_note`, 관계의 `relation_scope`)가 있어 버전으로 분기하지 않고 필드가 있으면 쓰는 방식으로 읽는다.
+  - 표 중복 이론은 블록의 `duplicate_of_table_id` 필드로 판단한다(1과목은 필드 7개인데 같은 관계는 1개). 값은 전체 block_id가 아니라 source_id(`TAB_104_01`)라 같은 과목의 `S{n}:TABLE:`로 풀어 쓴다.
+  - 표 `rows`는 병합 셀 값이 대부분 이미 채워져 있고 TAB_79_01만 빈 칸 1개를 `merged_cells`로 채워야 한다. `headers`가 빈 표(최종본 기준 TAB_104_01)는 첫 칸이 행 이름이다. 행 이름은 `rows` 첫 칸에 이미 들어 있으므로 `row_headers`는 쓰지 않는다(첫 판의 TAB_119_01은 `row_headers` 2개·행 7개로 달랐고, 최종본은 `[구분, 구성요소]` 2열 2행).
+  - 팀 규격 테이블(theory_chunks·visual_tables·visual_assets)도 필드가 비슷하지만 visual_tables에 임베딩 컬럼이 없고, visual_type CHECK에 없는 값(`composite_diagram_table`, `process_flow`)이 있으며, pages.source_s3_uri가 NOT NULL이고, 이론↔표·이론↔이론 관계를 둘 곳이 없다. 무엇보다 theory_chunks에 넣는 순간 지금 /qa·평가 검색(v_searchable_theory)에 섞인다.
+- 결정(사용자 승인 2026-10-07):
+  - DB: `004_common_json_blocks.sql`로 mingyu_app에 `documents`(문서 단위: document_key 고유, corpus, subject, subject_no, title, format_version, 같은 교재의 기존 book_id, manifest·pages·page_relations), `blocks`(block_id 고유, 블록 종류·block_role·쪽·제목 경로·raw/clean·표·시각자료·이미지 S3 키·model_generated·review, 원본의 나머지 필드는 `source`, `search_enabled`·`search_excluded_reason`, 임베딩 vector(1024)·embedding_text·해시, content_hash, processing_run_id), `block_relations`((from_block_id, to_block_id) 고유, relation_source·relation_types·link_type 보존), 뷰 `v_searchable_blocks`. 팀 규격 테이블은 바꾸지 않는다(books·processing_runs는 FK 참조만). 적용은 민규가 PR 머지 후.
+  - 블록 1개 = 검색 단위 1개(합치지 않음). 블록 길이: 이론 임베딩 텍스트 중앙값 212자·최대 754자, 표 최대 1,708자, bge-m3 토큰 최대 813(TAB_82_01)이라 `EMBEDDING_MAX_SEQ_LENGTH` 1024 안에 든다. 60자 미만 이론 9개도 제목과 함께 완결된 문장이었다. 합치면 block_id 단위 인용·재적재·관계 연결이 깨진다.
+  - 검색 제외(행은 저장, `search_enabled=false`): 표 중복 이론 25개(사유 `duplicate_of_table`, 표가 대표 — 둘 다 넣으면 상위 K에 같은 내용이 두 칸), 학습목표 23개(사유 `learning_objective`, "학습목표 + ★ 출제 중요도" 목록이 주제어만으로 상위권에 오를 위험). 설정 `COMMON_JSON_SEARCH_DUPLICATE_THEORY`·`COMMON_JSON_SEARCH_LEARNING_OBJECTIVE`로 다시 넣을 수 있다(비교 실험용).
+  - 임베딩 텍스트(`app/ingestion/common_json.py`): 이론 = 제목 경로(" > ") + 빈 줄 + clean_text / 표 = 제목 경로 + `[표] 제목` + 행마다 한 줄(`table.rows`, raw_text 안 씀. 머리행이 있으면 `- 머리: 값 | …`, 없으면 첫 칸을 행 이름으로 `- 행이름: 값 / …`, 병합 셀은 빈 칸만 채움, units는 `단위: …`) / 시각자료 = 제목 경로 + `[그림] 제목` + `설명:` visual_description + `구조:` visual_structure + `그림 속 글자:` raw_text. `related_theory_context`(이론과 중복)·`visual_observation`은 넣지 않는다. model_generated(keywords·exam_clues·confusable_concepts)는 저장만 하고 넣지 않는다(나중 비교 실험 항목).
+  - 결과(1·2과목 최종본 dry-run, 2026-10-07): 블록 390(1과목 163 / 2과목 227), 관계 170(62 / 108). 검색 대상 342(1과목 144: 이론 119·표 16·그림 9 / 2과목 198: 이론 144·표 21·그림 33), 제외 48(학습목표 23 = 12 + 11, 표 중복 이론 25 = 7 + 18). 검증 오류·경고 0건.
+  - 적재 스크립트 `python -m app.ingestion.common_json_load`(dry-run 기본, `--apply`, `--subject`, `--block-id`, `--prune`, `--delete`, `--no-db`, `--show`): 파일 전체 검증(format·subject 일치, validation_report passed, block_id 중복·형식, 타입별 필수 필드, block_role 값, duplicate_of_table_id 대상, 관계 끝점·link_type·ID·쌍 중복, pages의 reading_order, merged_cells 범위, 모르는 block_type) — 하나라도 실패하면 아무것도 쓰지 않는다. block_id upsert + content_hash·embedding_text_hash 비교로 **바뀐 블록만 임베딩**(수정본이 오면 과목 전체를 다시 돌려도 그 블록만 바뀜). 임베딩은 DB 쓰기 전에 끝내고 과목당 트랜잭션 1개(documents → blocks → block_relations 전체 동기화 → `--prune`), 실행 기록은 processing_runs 1건(metadata.common_json). 리포트 `data/reports/common_json/`.
+  - 데이터 확인 결과(수민님 2과목 최종 동기화본 2026-10-07로 해결): TAB_104_01·TH_104_01은 교재 원본에서 통합 행 문장이 조달 행에 중복 인쇄된 것이라 clean(표 rows·이론 clean_text)에서만 삭제(raw_text는 원문 유지), TH_101_02는 학습목표로 확정되어 duplicate_of_table_id와 관계 BREL_S2_00067 제거(관계 109 → 108), TAB_119_01은 `[구분, 구성요소]` 2열로 수정. 2과목 manifest의 `block_relation_count` 109는 남은 숫자 오타라 무시한다(validation_report는 108, 스크립트는 manifest 개수를 검사하지 않음).
+  - 경고만 하고 적재는 진행하는 경우: 학습목표 블록에 duplicate_of_table_id가 있을 때, relation_source=`duplicate_of_table_id` 관계가 블록 필드와 맞지 않을 때(중복 판단은 블록 필드 기준), `COMMON_JSON_PENDING_BLOCK_IDS`(수정본 대기 표시, 지금은 비어 있음)에 든 블록.
+  - 임베딩 시간(실측 2026-10-07, CPU, bge-m3, 배치 8): 모델 로드 29초, 블록당 0.72초 → 342블록 약 4분. 모델은 캐시(`E:\hf_models`)에서만 읽도록 설정 `EMBEDDING_OFFLINE=true`(HF_HUB_OFFLINE=1)를 추가했다.
+  - /qa는 이번에 바꾸지 않는다. 검색 대상 전환(`SEARCH_CORPUS`), 1·2과목 범위 비교 실험은 다음 PR, 관계 활용(쪽 넘김 이어짐, 이론↔표·시각자료 붙이기, D-J-005 visuals를 DB 기반으로)은 그다음 PR.
+- 대안:
+  - 팀 규격 테이블 + 새 book: 위 조사의 불일치 때문에 컬럼·CHECK 우회가 많고 적재 즉시 기존 검색에 섞인다.
+  - 짧은 블록을 같은 쪽 이웃과 합치기: block_id 단위가 깨진다. 이웃 문맥은 관계 활용 PR에서 근거를 붙이는 방식으로 다룬다.
+  - 중복 이론을 검색에 넣고 표를 빼기(큰 표를 나눈 조각이라 더 촘촘): 비교 실험 항목으로 남긴다.
+- 영향:
+  - **업로드 자료의 block_id 규칙 필요**: 사용자 업로드 자료가 blocks에 들어올 때 block_id가 공통 JSON의 `S{n}:{TYPE}:{source_id}` 형식과 겹치지 않도록 별도 접두어 규칙(예: `U:{document}:…`)을 그 PR에서 정한다(`blocks.block_id`는 전체 고유).
+  - **다음 PR(검색 대상 전환) 메모**: `SEARCH_CORPUS=common_json`이면 query_logs의 근거 ID(`retrieved_theory_ids`, `metadata.evidence[].chunk_id`)가 theory_chunks가 아니라 blocks의 id가 된다. 재원님 신고 스냅샷(`build_snapshot`)이 theory_chunks만 조회하면 전부 missing이 되므로, 그 PR에서 evidence에 `kind`·`block_id`·corpus를 넣고 스냅샷이 blocks도 조회하도록 재원님과 맞춘다.
+  - 재원님 브랜치의 D-J-005(공통 JSON 파일을 직접 읽어 visuals를 붙임)는 관계 활용 PR에서 DB(blocks의 S3 키·block_relations)로 바꾸고 응답 형식은 유지한다. 설정 이름 `COMMON_JSON_DIR`(기본 `data/common_json`)은 그 브랜치와 같게 맞췄다.
+  - 004를 적용하기 전에는 로컬 DB 테스트 `test_all_migrations_applied`가 실패한다(적용하면 통과, CI는 DB 테스트를 건너뜀).
+  - 3과목 공통 JSON이 오면 같은 스크립트로 적재한다. 그때까지 서비스 검색은 1·2과목 블록 + 3과목 theory_chunks를 함께 쓰는 방식이 필요하다(다음 PR의 `mixed`).

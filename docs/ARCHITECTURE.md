@@ -12,9 +12,9 @@ adsp-study-rag/
 │   │   ├── api/           # 라우터: health, books(과목·자료·업로드), runs(처리 상태), qa(질의), deps
 │   │   ├── core/config.py # .env 설정 (pydantic-settings, 스키마 이름 검증)
 │   │   ├── db/            # connection.py(풀, scoped_transaction), migrate.py(마이그레이션 실행기)
-│   │   ├── repositories/  # books / pages / runs / query_logs SQL (스키마는 Identifier로 명시)
+│   │   ├── repositories/  # books / pages / runs / query_logs / theory_chunks / blocks(공통 JSON) SQL (스키마는 Identifier로 명시)
 │   │   ├── storage/       # Storage 인터페이스, local(구현), s3(자리만), get_storage()
-│   │   ├── ingestion/     # images(업로드 검증·decode_bgr), ocr(PaddleOCR 엔진), pipeline(단계 실행·상태 갱신), stages(단계 함수), chunking(청킹 규칙), embedding(BGE-M3), team_import, run_stages
+│   │   ├── ingestion/     # images(업로드 검증·decode_bgr), ocr(PaddleOCR 엔진), pipeline(단계 실행·상태 갱신), stages(단계 함수), chunking(청킹 규칙), embedding(BGE-M3), team_import, run_stages, common_json(공통 JSON 읽기·검증·임베딩 텍스트), common_json_load(적재 CLI)
 │   │   ├── retrieval/     # search(벡터 검색·"확인 불가" 3구간), rerank(리랭커), evaluate(검색 평가), eval_report(평가 HTML 보고서)
 │   │   ├── qa/            # service(질의 흐름: 검색→3구간→판정기→답변→인용 검증·객관식 검사→query_logs), mcq_check(객관식 일관성 검사), sample_run(평가 질문 일부를 /qa로 실행), mcq_run(기출 객관식 파싱·/qa 실행·채점 요약·재검사)
 │   │   ├── llm/           # gemini(REST generateContent, JSON 구조화 출력, 재시도·폴백)
@@ -78,6 +78,7 @@ adsp-study-rag/
 - solution_evidence: source_schema, source_kind(theory/visual/table/formula), source_id, rank(solution별 UNIQUE), score, quoted_text(스냅샷)
 - judgments: solution_id/problem_id, provider, question_key(can_answer/classify/choose/verify), answer(JSONB), confidence, latency, cost
 - 요약 로그는 팀 규격 query_logs에도 기록한다.
+- (004, 2026-10-07 작성 — 적용은 PR 머지 후) 공통 JSON 적재용 `documents`, `blocks`, `block_relations`, 뷰 `v_searchable_blocks` → 아래 "공통 JSON 적재" 절
 - (설계만, 미적용) 오답노트용 wrong_notes / wrong_note_evidence / wrong_note_attempts → 아래 "오답노트" 절
 
 ### 설계에 쓰는 기존 컬럼 메모 (2026-09-30 DB에서 확인)
@@ -127,6 +128,15 @@ adsp-study-rag/
   - page_metadata: pdf_file, pdf_index, upload_index, text_source, render_dpi, text{uri, engine, source_file, covers_pages, lines, note, char_count}, missing_before, pipeline
   - 반입 결과: 3권 324페이지 EXTRACTED, run PARTIAL. 리포트 `data/reports/team_import/apply_{key}.json`
 - PaddleOCR 경로는 새로 업로드하는 캡처용으로 유지한다(우선순위만 뒤로).
+
+### 공통 JSON 적재 (구현 2026-10-07, D-M-032 — /qa 연결은 다음 PR)
+데이터 담당의 공통 JSON(`COMMON_JSON_DIR/subject{n}/`의 `*_blocks.json`·`*_relations.json`·manifest·validation_report)을 팀 텍스트 데이터(theory_chunks)와 **따로** mingyu_app에 넣는다. 33문항·기출로 비교한 뒤 교체 여부를 정한다.
+- 테이블(004): `documents`(문서 1행 = 과목 1개, `document_key` = `{format}:subject{n}`, corpus `common_json`, 같은 교재의 기존 book_id) → `blocks`(블록 1행 = 검색 단위 1개, `block_id` 전체 고유) → `block_relations`((from, to) 고유, relation_source·relation_types 보존). 문서를 지우면 블록·관계가 CASCADE로 지워진다. 검색 대상 뷰 `v_searchable_blocks`(search_enabled + 임베딩 있음 + needs_review=false), HNSW는 `WHERE search_enabled AND embedding IS NOT NULL`.
+- 읽기: 버전 문자열로 분기하지 않고 필드가 있으면 쓴다. 컬럼에 없는 원본 필드는 `blocks.source`, 원문은 `raw_text`(JSONB, 원본 형태 그대로). 표·시각자료의 빈 block_role은 content. 중복 이론은 블록의 `duplicate_of_table_id`(source_id → `S{n}:TABLE:…`)로 판단.
+- 검색 제외(행은 저장): 표 중복 이론(`duplicate_of_table`), 학습목표(`learning_objective`). 설정 `COMMON_JSON_SEARCH_*`로 다시 넣을 수 있다.
+- 임베딩 텍스트: 이론 = 제목 경로 + clean_text / 표 = 제목 경로 + `[표] 제목` + 행마다 한 줄(rows, 병합 셀 빈칸 채움, units) / 시각자료 = 제목 경로 + `[그림] 제목` + 설명 + 구조 + 그림 속 글자. related_theory_context·model_generated는 넣지 않는다.
+- 실행: `cd backend; uv run python -m app.ingestion.common_json_load --subject all --no-db`(파일 검증·텍스트만) → `--subject all`(DB와 비교, 읽기만) → `--apply --subject all`. 수정본은 같은 명령을 다시 돌리면 바뀐 블록만 다시 임베딩되고, `--block-id`로 블록을 지정할 수도 있다. `--prune`(파일에서 빠진 블록 삭제), `--delete`(문서째 삭제), `--show <block_id>`(임베딩 텍스트 출력).
+- 흐름: 파일 전체 검증(하나라도 실패하면 중단) → 블록 변환·임베딩 텍스트 → DB와 해시 비교(new/changed/unchanged) → 바뀐 검색 대상만 임베딩(DB 쓰기 전) → 과목당 트랜잭션 1개(documents upsert → blocks upsert → block_relations 전체 동기화 → prune) → processing_runs 1건(metadata.common_json) → 리포트 `data/reports/common_json/{시각}_{mode}.json`(블록별 상태·임베딩 텍스트).
 
 ### 이론 청킹 보완: 페이지를 넘는 코드 블록 (설계 2026-10-01, D-026 — 구현은 GitHub Issues "청킹 보완", 데이터 확정 후)
 현재 규칙(D-019)은 청크가 페이지를 넘지 않아서, 페이지를 넘어 이어지는 R 코드가 둘로 갈리고 뒷부분이 짧은 출력 조각이면 needs_review로 검색에서 빠진다(조사 결과 요약은 D-026, 처리 방법 초안은 `docs/guides/cross-page-code.md`).

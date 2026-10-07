@@ -22,16 +22,24 @@ _embedder_lock = threading.Lock()
 def ensure_hf_home(settings: Settings) -> None:
     """HF_HOME을 EMBEDDING_MODEL_DIR로 맞춘다(임베딩·리랭커 공용 캐시). sentence_transformers import 전에 부른다.
 
+    EMBEDDING_OFFLINE=true면 HF_HUB_OFFLINE=1도 설정한다(캐시에서만 읽음).
+
     이미 다른 위치로 import돼 있으면 모델이 C:에 받아지므로 오류로 멈춘다.
     """
-    if settings.embedding_model_dir is None:
+    if settings.embedding_offline:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+    if settings.embedding_model_dir is not None:
+        os.environ["HF_HOME"] = str(settings.embedding_model_dir)
+    if settings.embedding_model_dir is None and not settings.embedding_offline:
         return
-    os.environ["HF_HOME"] = str(settings.embedding_model_dir)
     import huggingface_hub.constants
 
-    actual = Path(huggingface_hub.constants.HF_HOME).resolve()
-    if actual != settings.embedding_model_dir.resolve():
-        raise RuntimeError(f"HF_HOME이 설정과 다름(이미 import됨): {actual}")
+    if settings.embedding_model_dir is not None:
+        actual = Path(huggingface_hub.constants.HF_HOME).resolve()
+        if actual != settings.embedding_model_dir.resolve():
+            raise RuntimeError(f"HF_HOME이 설정과 다름(이미 import됨): {actual}")
+    if settings.embedding_offline and not huggingface_hub.constants.HF_HUB_OFFLINE:
+        raise RuntimeError("EMBEDDING_OFFLINE=true인데 HF_HUB_OFFLINE이 꺼져 있음(이미 import됨)")
 
 
 class LocalEmbedder:

@@ -1,4 +1,4 @@
-# MODIFY_GUIDE — 무엇을 바꾸려면 어디를 고치나 (2026-10-01 기준)
+# MODIFY_GUIDE — 무엇을 바꾸려면 어디를 고치나 (2026-10-07 기준)
 
 사용자가 직접 값을 조정할 때 보는 문서다. 원칙은 CLAUDE.md의 "조정 가능한 값" 규칙을 따른다. 조정할 만한 값은 `.env` 또는 `backend/app/core/config.py` 한 곳에 있고, LLM 프롬프트 문장은 `backend/app/prompts/` 아래 텍스트 파일에 둔다.
 
@@ -41,6 +41,11 @@
 | 임베딩 장치 | `.env` | `EMBEDDING_DEVICE` (기본 `cpu`, `.env`에 없으면 config 기본값 cpu). 지금 설치된 torch는 CPU 빌드라 GPU 값은 동작하지 않음 | `uv run pytest -m embedding_model` |
 | 임베딩 모델 저장 위치 | `.env` | `EMBEDDING_MODEL_DIR` (HF_HOME으로 전달, 현재 `E:\hf_models`, 비우면 C:) | 첫 실행 후 그 폴더 아래 `hub/models--BAAI--bge-m3` |
 | 임베딩 속도·메모리 | `.env` | `EMBEDDING_BATCH_SIZE`(8), `EMBEDDING_MAX_SEQ_LENGTH`(1024 토큰, 넘으면 잘림) | `run_stages --stages embed --pages 14,15` 실행 시간 |
+| 임베딩·리랭커 모델을 캐시에서만 읽기(인터넷 확인 안 함) | `.env` | `EMBEDDING_OFFLINE`(기본 false, true면 HF_HUB_OFFLINE=1). 캐시(`EMBEDDING_MODEL_DIR`)에 모델이 없으면 오류 | `uv run pytest -m embedding_model` |
+| 공통 JSON 폴더·과목 이름 | `.env` | `COMMON_JSON_DIR`(기본 `data/common_json`, 아래에 `subject{n}/` 폴더), `COMMON_JSON_SUBJECT`(documents.subject 값, 기본 `ADsP`) | `cd backend; uv run python -m app.ingestion.common_json_load --subject all --no-db` |
+| 공통 JSON 검색 제외 규칙(학습목표·표 중복 이론) | `.env` | `COMMON_JSON_SEARCH_LEARNING_OBJECTIVE`, `COMMON_JSON_SEARCH_DUPLICATE_THEORY`(둘 다 기본 false = 검색 제외, 행은 저장). true로 바꾼 뒤 `--apply`로 다시 적재하면 해당 블록만 임베딩됨(D-M-032) | dry-run 요약의 "검색 대상 / 제외" 수 |
+| 수정본 대기 블록 표시 | `.env` | `COMMON_JSON_PENDING_BLOCK_IDS`(쉼표 구분 block_id, 적재는 하고 리포트에 경고만). 수정본을 반영하면 지운다 | dry-run 요약의 "경고:" 줄 |
+| 공통 JSON 임베딩 텍스트 형식(표 행 이어 쓰기, 그림 설명 순서 등) | `backend/app/ingestion/common_json.py` | `embedding_text`, `linearize_table`(D-M-032 규칙) — 바꾸면 해당 블록이 다시 임베딩됨 | `uv run pytest backend/tests/test_common_json.py` → `common_json_load --no-db --show <block_id>` |
 | 검색 개수(Top-K) | `.env` | `SEARCH_TOP_K`(5) | `cd backend; uv run python -m app.retrieval.search "질문"` |
 | 검색 평가 질문 세트·임계값 후보 | `.env` / `eval/questions.csv` | `EVAL_QUESTIONS_PATH`(질문 CSV, 형식은 ARCHITECTURE "검색 평가"), `EVAL_RANK_DEPTH`(20, 정답 순위 찾는 깊이), `EVAL_THRESHOLDS`(0.40,0.45,0.50,0.55,0.60) | `cd backend; uv run python -m app.retrieval.evaluate --check`(형식만) → `uv run python -m app.retrieval.evaluate` → `data/reports/eval/` |
 | 검색 평가 HTML 보고서 | `.env` | `EVAL_REPORT_THUMB_WIDTH`(320, 페이지 썸네일 가로 픽셀), `EVAL_REPORT_TEXT_CHARS`(200, 청크 텍스트 앞부분 글자 수). 평가 실행 시 자동 생성, 이미 있는 json으로 다시 만들기: `cd backend; uv run python -m app.retrieval.eval_report [json 경로]` | `data/reports/eval/{시각}.html` (썸네일은 `thumbs/`, 교재 이미지라 커밋 안 함) |

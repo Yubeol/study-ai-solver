@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     embedding_device: str = "cpu"
     embedding_batch_size: int = Field(default=8, gt=0)
     embedding_max_seq_length: int = Field(default=1024, gt=0)  # 토큰. 청크는 약 800자라 충분(모델 최대 8192)
+    # true면 HF_HUB_OFFLINE=1로 모델을 캐시(EMBEDDING_MODEL_DIR)에서만 읽는다(인터넷 확인 안 함). 캐시에 없으면 오류
+    embedding_offline: bool = False
 
     # 검색
     search_top_k: int = Field(default=5, gt=0)
@@ -128,6 +130,16 @@ class Settings(BaseSettings):
     team_import_preview_dpi: int = Field(default=14, gt=0)  # 쪽번호 대조용 저해상도 미리보기
     reports_dir: Path = Field(default=Path("data/reports"))  # dry-run 계획·미리보기 출력
 
+    # 공통 JSON 적재 (D-M-032, python -m app.ingestion.common_json_load). 과목 폴더 subject{n}/ 아래
+    # *_blocks.json, *_relations.json(+ manifest, validation_report)
+    common_json_dir: Path = Field(default=Path("data/common_json"))
+    common_json_subject: str = "ADsP"  # documents.subject 값(books.subject와 같게)
+    # 검색 제외 규칙(행은 저장, search_enabled=false). true로 바꾸고 다시 적재하면 검색 대상이 된다(비교 실험용)
+    common_json_search_learning_objective: bool = False  # block_role=learning_objective(학습목표·출제 중요도)
+    common_json_search_duplicate_theory: bool = False  # duplicate_of_table_id가 있는 이론(표가 대표)
+    # 수정본을 기다리는 block_id(쉼표 구분). 적재는 하되 리포트에 경고로 표시
+    common_json_pending_block_ids: str = ""
+
     # 이론 청킹 (D-019). 글자 수 기준(공백 포함). 청크는 페이지를 넘지 않는다.
     chunk_max_chars: int = Field(default=800, gt=0)  # 청크 clean_text 최대 길이(문단 하나가 더 길면 자르지 않음)
     chunk_overlap_chars: int = Field(default=120, ge=0)  # 긴 절을 나눌 때 앞 조각 끝 문단을 이만큼까지 다시 넣음
@@ -176,6 +188,14 @@ class Settings(BaseSettings):
     @property
     def reports_path(self) -> Path:
         return _from_root(self.reports_dir)
+
+    @property
+    def common_json_path(self) -> Path:
+        return _from_root(self.common_json_dir)
+
+    @property
+    def common_json_pending_block_id_set(self) -> set[str]:
+        return {x.strip() for x in self.common_json_pending_block_ids.split(",") if x.strip()}
 
     @property
     def eval_questions_file(self) -> Path:
