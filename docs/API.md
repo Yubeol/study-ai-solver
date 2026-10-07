@@ -122,7 +122,7 @@ book 객체:
 
 흐름: 질문 임베딩 → 벡터 후보 N개(`SEARCH_CANDIDATES_N`) → 리랭커 → 상위 K개 → "확인 불가" 3구간 → (회색 구간이면 판정기) → Gemini 답변 + 인용 검증 → `query_logs` 기록. 자세한 설계는 ARCHITECTURE "질의 흐름", D-024·D-025·D-028.
 
-검색 대상은 서버 설정 `SEARCH_CORPUS`가 정합니다(요청 값으로 바꾸지 않음, D-M-033): `team_text`(팀 텍스트 이론 청크, 기본) / `common_json`(공통 JSON 블록: 이론·표·시각자료) / `mixed`(공통 JSON이 적재된 교재는 블록, 나머지 교재는 이론 청크).
+검색 대상은 서버 설정 `SEARCH_CORPUS`가 정합니다(요청 값으로 바꾸지 않음, D-M-033): `team_text`(팀 텍스트 이론 청크) / `common_json`(공통 JSON 블록: 이론·표·시각자료) / `mixed`(기본, 공통 JSON이 적재된 교재는 블록, 나머지 교재는 이론 청크).
 
 응답(200, 답변한 경우):
 ```json

@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     search_candidates_n: int = Field(default=10, gt=0)  # 리랭커에 넘길 벡터 후보 수(리랭커 없으면 안 씀, D-024)
     # 검색 대상(D-M-033): team_text = theory_chunks만 / common_json = 공통 JSON 블록만 /
     # mixed = documents(corpus='common_json')에 연결된 book은 블록, 나머지 book은 theory_chunks
-    search_corpus: Literal["team_text", "common_json", "mixed"] = "team_text"
+    search_corpus: Literal["team_text", "common_json", "mixed"] = "mixed"
     # 블록 이미지 URL 틀. {key}에 thumbnail_s3_key / crop_s3_key가 들어간다. 비우면 URL을 만들지 않음(null)
     asset_url_template: str = ""
 

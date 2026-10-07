@@ -54,8 +54,8 @@ def test_empty_ocr_model_dir_is_none():
 
 
 def test_search_corpus_default_and_values():
-    assert make().search_corpus == "team_text"
-    assert make(search_corpus="mixed").search_corpus == "mixed"
+    assert make().search_corpus == "mixed"
+    assert make(search_corpus="team_text").search_corpus == "team_text"
     with pytest.raises(ValidationError):
         make(search_corpus="blocks")
 

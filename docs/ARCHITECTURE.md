@@ -226,7 +226,7 @@ adsp-study-rag/
 - 목표 구조: 벡터(+키워드) 후보 **N개** → 리랭커 → 상위 **K개**. 키워드 후보 합치기는 아직 없음.
 
 #### 검색 대상 전환 (구현 2026-10-07, D-M-033)
-- 설정 `SEARCH_CORPUS`: `team_text`(기본, `v_searchable_theory`) / `common_json`(`mingyu_app.v_searchable_blocks`) / `mixed`. 진입점은 `search.search_candidates`(질의 흐름·평가·확인용 CLI가 같이 씀).
+- 설정 `SEARCH_CORPUS`: `team_text`(`v_searchable_theory`) / `common_json`(`mingyu_app.v_searchable_blocks`) / `mixed`(기본, 2026-10-07 D-M-033). 진입점은 `search.search_candidates`(질의 흐름·평가·확인용 CLI가 같이 씀).
 - **mixed 규칙**: `mingyu_app.documents`에 `corpus='common_json'`으로 연결된 book(`documents.book_id`)은 블록에서, 나머지 book은 이론 청크에서(그 book 제외) 각각 후보 N개 → 두 쪽 모두 bge-m3 정규화 벡터라 cosine 점수로 합쳐 상위 N개 → 리랭커. 과목 목록은 설정에 없어서, **3과목 공통 JSON을 적재하면 mixed의 3과목 검색 대상이 자동으로 블록으로 바뀐다**. 후보 출처 개수는 `candidate_sources`로 남긴다.
 - 블록 행은 이론 청크와 같은 모양으로 맞춘다(`search.block_row`): `kind`(theory/table/visual), `corpus`, `block_id`, `title_path`·`path`, `printed_page_number`(문자열), `raw_text`(표·그림 원문 목록은 줄바꿈으로 이은 문자열), `book_id`·`book_title`(연결된 book), 이미지 URL(`ASSET_URL_TEMPLATE` + 저장소 키).
 - 블록의 LLM·판정기용 본문(`clean_text` 자리) = `common_json.embedding_text(블록, with_path=False)`: 적재 때 임베딩 텍스트를 만든 함수와 같은 함수로, 제목 경로만 뺀다(이론은 clean_text, 표는 `[표] 제목` + 행, 그림은 `[그림] 제목` + 설명·구조·그림 속 글자). DB 컬럼만으로 다시 만들며(`block_from_row`), 저장된 390블록 전부가 적재 때 값과 같음을 로컬 DB 테스트로 확인한다. 리랭커 입력은 저장된 `embedding_text` 그대로.
