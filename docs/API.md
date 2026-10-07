@@ -21,6 +21,11 @@
 | POST | `/books/{book_id}/pages` | 페이지 이미지 업로드 → 백그라운드 처리 시작 |
 | GET | `/processing-runs/{run_id}` | 처리 실행 하나 + 그 페이지들 |
 | POST | `/qa` | 질문 → 답변·근거 |
+| POST | `/answer-reports` | 답변 오류 신고 저장(근거 스냅샷 포함) |
+| GET | `/answer-reports?status=&limit=` | 오류 신고 목록(최신순) |
+| PATCH | `/answer-reports/{id}` | 신고 하나의 처리 상태 변경(open/resolved) |
+| POST | `/supplements` | 보충 이론 등록(텍스트/이미지/PDF) → 검토 대기, 임베딩 안 함 |
+| GET | `/supplements?status=&limit=` | 보충 이론 목록(검토 대기는 `pending_review`) |
 
 ## 상태 확인
 
@@ -187,3 +192,92 @@ book 객체:
 | 422 | `question`이 비었거나 2000자 초과, `k` 범위 밖 |
 | 503 | 질의 모델 미로드(`PRELOAD_MODELS=false`) |
 | 500 | DB 접속 실패 등 |
+
+## 오류 신고
+
+저장 위치: `DB_APP_SCHEMA.answer_reports`(마이그레이션 `003_jaewon_answer_reports.sql`, D-JW-004). 한 답변에 신고가 여러 번 오면 행이 하나씩 쌓입니다.
+
+### `POST /answer-reports` → 201
+요청(JSON, 프론트 오류 신고 화면 값):
+```json
+{
+  "question": "다음 중 빅데이터 가치 패러다임의 변화 단계별 순서로 가장 적절한 것은? …",
+  "type": "wrong_concept",
+  "concept_details": ["관련 개념이 빠져 있어요"],
+  "detail": "근거가 다른 단원이에요",
+  "query_log_id": "990cdaba-f52e-425d-a7ee-b4250abe1a8f",
+  "evidence": [{"n": 1, "chunk_id": "uuid", "book_title": "…", "page": "62", "path": "…", "raw_text": "…"}]
+}
+```
+- `type`(또는 `report_type`, 프론트 이름): `wrong_answer`(답이 틀림) / `wrong_explanation`(해설이 틀림) / `wrong_concept`(개념·근거가 이상함) / `missing_concept`(관련 개념이 부족함) / `wrong_ocr`(문제를 잘못 읽음) / `insufficient`(설명이 부족함) / `other`
+- `question`: 1~2000자. `detail`: 0~500자. `concept_details`: 문자열 최대 10개(각 1~100자)
+- `query_log_id`(권장): `/qa` 응답의 `query_log_id`. 있으면 질문·답·근거를 그 기록에서 가져와 스냅샷으로 남깁니다(없는 id면 422).
+- `evidence`(선택): `/qa` 응답의 `evidence` 그대로. 재적재로 청크가 없어졌거나 `query_log_id`가 없을 때 스냅샷에 씁니다.
+- `answer`(선택): `query_log_id`가 없을 때만 답 스냅샷으로 씁니다. 그 밖의 필드(예: `explanation`)는 무시합니다.
+
+응답:
+```json
+{
+  "id": "uuid", "query_log_id": "uuid 또는 null",
+  "question_text": "…", "answer_text": "정답은 ④이다 [1][2]. …",
+  "report_type": "wrong_concept", "concept_details": ["관련 개념이 빠져 있어요"], "detail": "…",
+  "evidence_snapshot": [{
+    "n": 1, "chunk_id": "uuid", "book_title": "2024 ADsP 한 권으로 끝내기 이론편 - 1과목 데이터 이해", "page": "62",
+    "path": "3장 … > 2. 빅데이터 회의론을 넘어 : 가치 패러다임의 변화", "raw_text": "교재 원문 그대로",
+    "vector_score": 0.747, "rerank_score": 0.978, "cited": true, "source": "db"
+  }],
+  "status": "open", "created_at": "2026-10-06T…", "resolved_at": null
+}
+```
+- `evidence_snapshot[].source`: `db`(신고 시점에 청크를 조회해 채움) / `client`(요청의 `evidence`로 채움) / `missing`(둘 다 없음, `raw_text` null). `query_logs`에는 근거가 청크 id·쪽·점수로만 남아 있어서, 재적재 뒤에도 신고 당시 근거를 볼 수 있도록 원문까지 복사합니다.
+
+### `GET /answer-reports?status=open&limit=50`
+최신순 목록. `status`: `open` / `resolved`(생략하면 전체), `limit`: 1~200(기본 50). 항목 형식은 위 응답과 같습니다.
+
+### `PATCH /answer-reports/{id}`
+```json
+{"status": "resolved"}
+```
+신고 하나의 상태만 바꿉니다. `resolved`면 `resolved_at`이 채워지고 `open`으로 되돌리면 null. 없는 id면 404.
+
+## 보충 이론
+
+저장 위치: `DB_APP_SCHEMA.supplements`(003). **검토 대기(`pending_review`)로만 저장하고 임베딩하지 않습니다.** 승인 → 추출·청킹·임베딩은 별도 작업입니다.
+
+### `POST /supplements` → 201
+요청: `multipart/form-data`
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `source` | O | `report`(오류 신고 화면 안에서 첨부) / `unanswerable`("확인 불가" 답변의 [이론 보충하기]) |
+| `kind` | | `text` / `image` / `pdf`. 생략하면 자동: 파일이 PDF면 `pdf`, 그 밖의 파일은 `image`, 파일 없이 내용만 있으면 `text` |
+| `title` | | 자료 제목(0~200자) |
+| `content`(또는 `text`) | kind=text | 이론 내용(`SUPPLEMENT_MAX_TEXT_CHARS`자 이하). 프론트는 `text`로 보냄 |
+| `file` | kind=image/pdf | 이미지 PNG/JPEG/WEBP 또는 PDF(`MAX_UPLOAD_MB` 이하, PDF는 `SUPPLEMENT_MAX_PDF_PAGES`쪽 이하) |
+| `report_id` | | 오류 신고 안에서 첨부할 때 `POST /answer-reports` 응답의 `id` |
+| `query_log_id` | | `/qa` 응답의 `query_log_id` |
+| `question` | | 어떤 질문 때문에 넣은 자료인지(0~2000자) |
+| `subject` | | 과목 |
+
+화면 흐름(오류 신고 안에서 첨부): `POST /answer-reports` → 받은 `id`를 `report_id`로 `POST /supplements`.
+
+응답:
+```json
+{
+  "id": "uuid", "report_id": "uuid 또는 null", "query_log_id": "uuid 또는 null",
+  "source": "report", "kind": "pdf", "title": "가치 패러다임 정리", "subject": null, "question_text": "…",
+  "content_text": null, "original_filename": "정리.pdf", "mime_type": "application/pdf",
+  "byte_size": 182344, "page_count": 3, "status": "pending_review", "review_note": null,
+  "created_at": "2026-10-06T…", "reviewed_at": null
+}
+```
+파일은 저장소 `supplements/{id}.{png|jpg|webp|pdf}`에 두며, 저장소 위치(URI)는 응답에 넣지 않습니다.
+
+오류:
+| 코드 | 경우 |
+|---|---|
+| 400 | 텍스트가 비었거나 너무 김 / 파일 없음 / 이미지·PDF가 아님 / PDF 쪽 수 초과 |
+| 413 | `MAX_UPLOAD_MB` 초과 |
+| 422 | `source`·`kind` 값이 틀림 / 없는 `report_id`·`query_log_id` |
+
+### `GET /supplements?status=pending_review&limit=50`
+최신순 목록. `status`: `pending_review` / `approved` / `rejected`(생략하면 전체), `limit`: 1~200.
