@@ -51,3 +51,19 @@ def test_ocr_det_model_requires_rec_model():
 
 def test_empty_ocr_model_dir_is_none():
     assert make(ocr_model_dir="").ocr_model_dir is None
+
+
+def test_search_corpus_default_and_values():
+    assert make().search_corpus == "team_text"
+    assert make(search_corpus="mixed").search_corpus == "mixed"
+    with pytest.raises(ValidationError):
+        make(search_corpus="blocks")
+
+
+def test_asset_url_template():
+    assert make().asset_url("a/b.jpg") is None
+    s = make(asset_url_template=" https://cdn.example/{key} ")
+    assert s.asset_url("a/b.jpg") == "https://cdn.example/a/b.jpg"
+    assert s.asset_url(None) is None
+    with pytest.raises(ValidationError):
+        make(asset_url_template="https://cdn.example/")
