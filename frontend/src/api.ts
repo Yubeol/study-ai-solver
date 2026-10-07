@@ -148,6 +148,10 @@ export class ApiError extends Error {}
 const QA_TIMEOUT_SECONDS =
     Number(import.meta.env.VITE_QA_TIMEOUT_SECONDS) || 60
 
+// /ocr 전용(Gemini 재시도 + PaddleOCR 첫 로드까지 기다림). frontend/.env.example 참고
+const OCR_TIMEOUT_SECONDS =
+    Number(import.meta.env.VITE_OCR_TIMEOUT_SECONDS) || 330
+
 const CONNECTION_ERROR =
     '서버에 연결할 수 없습니다(백엔드 실행 확인)'
 
@@ -333,4 +337,21 @@ export function createSupplement(
         body: formData,
       },
   )
+}
+
+export type OcrResponse = {
+  text: string
+  engine: 'google_vision' | 'gemini' | 'paddleocr'
+  model: string | null
+  problem_text: string
+  choices: string[]
+  figure_description: string
+  fallback_reason: 'vision_not_configured' | 'vision_failed' | 'llm_not_configured' | 'llm_failed' | null
+}
+
+// 문제 사진 → 문제 텍스트(POST /ocr). Gemini(기본)·Google Vision, 실패하면 PaddleOCR(첫 호출은 모델 로드로 느림). 그것도 실패하면 503(직접 입력 안내).
+export function ocr(file: File): Promise<OcrResponse> {
+  const body = new FormData()
+  body.append('file', file)
+  return request<OcrResponse>('/ocr', { method: 'POST', body }, OCR_TIMEOUT_SECONDS)
 }
