@@ -8,6 +8,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.core.config import Settings
+from app.ingestion.common_json import TITLE_PATH_SEP, raw_text_display
 
 _COLUMNS = sql.SQL(
     "id, query_log_id, question_text, answer_text, report_type, concept_details, detail, "
@@ -42,6 +43,39 @@ def get_chunks(conn: psycopg.Connection, settings: Settings, chunk_ids: list[str
     ).format(s=sql.Identifier(settings.db_schema))
     with conn.cursor(row_factory=dict_row) as cur:
         return {str(r["id"]): r for r in cur.execute(q, (ids,)).fetchall()}
+
+
+def get_blocks(conn: psycopg.Connection, settings: Settings, ids: list[str]) -> dict[str, dict]:
+    """공통 JSON 블록 id(blocks.id) → get_chunks와 같은 모양(책 제목, 인쇄 쪽, 제목, 원문 문자열) + path.
+
+    근거의 chunk_id가 corpus=common_json이면 blocks.id다(D-M-033). 다시 적재해 없어진 id는 빠진다.
+    """
+    uuids = []
+    for i in ids:
+        try:
+            uuids.append(UUID(str(i)))
+        except ValueError:
+            continue
+    if not uuids:
+        return {}
+    q = sql.SQL(
+        "SELECT b.id, b.title, b.title_path, b.raw_text, b.printed_page_number, "
+        "  coalesce(bk.title, d.title) AS book_title "
+        "FROM {a}.blocks b JOIN {a}.documents d ON d.id = b.document_id LEFT JOIN {s}.books bk ON bk.id = d.book_id "
+        "WHERE b.id = ANY(%s)"
+    ).format(a=sql.Identifier(settings.db_app_schema), s=sql.Identifier(settings.db_schema))
+    with conn.cursor(row_factory=dict_row) as cur:
+        rows = cur.execute(q, (uuids,)).fetchall()
+    return {
+        str(r["id"]): {
+            "title": r["title"],
+            "book_title": r["book_title"],
+            "printed_page_number": str(r["printed_page_number"]),
+            "raw_text": raw_text_display(r["raw_text"]),
+            "path": TITLE_PATH_SEP.join(r["title_path"] or []) or r["title"],
+        }
+        for r in rows
+    }
 
 
 def insert_report(

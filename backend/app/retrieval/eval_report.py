@@ -38,7 +38,10 @@ def collect(conn, settings: Settings, report: dict, out_dir: Path) -> dict:
     book_ids = _subject_book_ids(conn, settings)
     s = sql.Identifier(settings.db_schema)
 
-    chunk_ids = sorted({t["chunk_id"] for q in questions for t in q["top"][:k]})
+    tops = [t for q in questions for t in q["top"][:k]]
+    # 검색 대상 전환(D-M-033): corpus가 common_json이면 chunk_id는 blocks.id. 예전 json에는 corpus가 없다(= team_text)
+    chunk_ids = sorted({t["chunk_id"] for t in tops if t.get("corpus", "team_text") == "team_text"})
+    block_ids = sorted({t["chunk_id"] for t in tops if t.get("corpus", "team_text") != "team_text"})
     with conn.cursor(row_factory=dict_row) as cur:
         chunks = {
             str(r["id"]): r
@@ -50,6 +53,21 @@ def collect(conn, settings: Settings, report: dict, out_dir: Path) -> dict:
                 ([UUID(c) for c in chunk_ids],),
             ).fetchall()
         }
+        if block_ids:
+            # 블록 텍스트 = 임베딩 텍스트, 페이지 썸네일은 같은 교재(documents.book_id)의 같은 인쇄 쪽 pages 행
+            chunks |= {
+                str(r["id"]): r
+                for r in cur.execute(
+                    sql.SQL(
+                        "SELECT b.id, b.embedding_text AS clean_text, p.id AS page_id, p.source_s3_uri "
+                        "FROM {a}.blocks b JOIN {a}.documents d ON d.id = b.document_id "
+                        "LEFT JOIN {s}.pages p ON p.book_id = d.book_id "
+                        "  AND p.printed_page_number = b.printed_page_number::text "
+                        "WHERE b.id = ANY(%s)"
+                    ).format(s=s, a=sql.Identifier(settings.db_app_schema)),
+                    ([UUID(c) for c in block_ids],),
+                ).fetchall()
+            }
         gold_pages = {}  # (subject, 인쇄 쪽) → pages 행
         wanted = {(q["subject"], p) for q in questions for p in q["pages"]}
         for subj in {w[0] for w in wanted}:
@@ -83,7 +101,7 @@ def collect(conn, settings: Settings, report: dict, out_dir: Path) -> dict:
                     "text": text[:n_chars] + ("…" if len(text) > n_chars else ""),
                     "missing_chunk": c is None,
                     "gold": bool(q["pages"]) and t["subject"] == q["subject"] and str(t["page"]) in q["pages"],
-                    **(thumbs.get(c["page_id"], c["source_s3_uri"]) if c else {}),
+                    **(thumbs.get(c["page_id"], c["source_s3_uri"]) if c and c["page_id"] else {}),
                 }
             )
         items.append({**q, "gold_pages": gold, "top": top})
@@ -225,7 +243,7 @@ def _card(q: dict, k: int, kind: str) -> str:
     rows = "".join(
         f'<tr{" class=g" if t["gold"] else ""}><td>{t["rank"]}</td><td>{t["score"]:.3f}{_vec(t)}</td>'
         f"<td>{escape(str(t['subject'] or '?'))}<br>p{escape(str(t['page']))}</td>"
-        f"<td class=txt><b>{escape(t['title'] or '')}</b>\n"
+        f"<td class=txt>{_block_label(t)}<b>{escape(t['title'] or '')}</b>\n"
         f"{escape(t['text']) if not t['missing_chunk'] else '<span class=err>(청크 없음 — 평가 후 재청킹됐을 수 있음)</span>'}</td>"
         f"<td class=img>{_thumb(t)}</td></tr>"
         for t in q["top"]
@@ -236,6 +254,13 @@ def _card(q: dict, k: int, kind: str) -> str:
         f"<div class=meta>{escape(q.get('note') or '')}</div>{gold}"
         f"<table><tr><th>순위</th><th>점수</th><th>쪽</th><th>청크</th><th>페이지</th></tr>{rows}</table></section>"
     )
+
+
+def _block_label(t: dict) -> str:
+    """공통 JSON 블록이면 종류·block_id 표시(이론 청크는 표시 없음)."""
+    if not t.get("block_id"):
+        return ""
+    return f"<small>[{escape(t.get('kind') or '')}] {escape(t['block_id'])}</small><br>"
 
 
 def _vec(t: dict) -> str:

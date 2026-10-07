@@ -6,7 +6,9 @@
   그 이상이면 답변(JUDGE_CONFIDENT_MIN 미만이면 "근거 확신 낮음"). 판정기 오류나 JUDGE_PROVIDER=none이면
   판정 생략 → 답변하되 "근거 확신 낮음"(D-028).
 - 객관식 일관성 검사(mcq_check): 보기별 판정과 고른 번호가 모순이면 답은 그대로 두고 "근거 확신 낮음".
-- LLM 입력은 근거마다 과목(책 제목)·인쇄 쪽·제목 경로·clean_text. 응답의 근거 표시는 raw_text(교재 원문 그대로).
+- 검색 대상은 SEARCH_CORPUS(team_text / common_json / mixed, D-M-033). 근거 행은 search_candidates가 같은 모양으로 맞춘다.
+- LLM 입력은 근거마다 과목(책 제목)·인쇄 쪽·제목 경로·clean_text(블록은 제목 경로를 뺀 블록 텍스트 — 표는 행,
+  그림은 설명·구조·그림 속 글자). 응답의 근거 표시는 raw_text(교재 원문 그대로, 표·그림 원문 목록은 줄바꿈으로 이음).
 - LLM이 unanswerable=true로 답하면 "자료에서 확인 불가"(3구간 뒤 한 겹 더).
 - 인용 검증: cited와 본문의 [n] 중 넘긴 근거 번호(1..K) 밖인 것은 제거하고 metadata에 기록.
 - 모델(임베딩·리랭커·LLM)은 서버 시작 시 load_qa_models로 미리 올린다(지연 로딩 안 함).
@@ -27,7 +29,7 @@ from app.prompts import load_json, load_text, render
 from app.qa.mcq_check import check_mcq
 from app.repositories.query_logs import insert_query_log
 from app.retrieval.rerank import LocalReranker, get_reranker, rerank
-from app.retrieval.search import is_answerable, search_theory
+from app.retrieval.search import TEAM_TEXT, candidate_sources, is_answerable, search_candidates
 
 log = logging.getLogger(__name__)
 
@@ -71,17 +73,29 @@ def heading_path(row: dict) -> str:
 
 
 def build_evidence(rows: list[dict]) -> list[dict]:
+    """근거 목록. 앞의 필드는 기존 그대로, 뒤의 필드는 검색 대상 전환(D-M-033)에서 추가만 했다.
+
+    chunk_id는 corpus가 team_text면 theory_chunks.id, common_json이면 blocks.id.
+    """
     return [
         {
             "n": i,
             "chunk_id": str(r["id"]),
             "book_title": r["book_title"],
             "page": r["printed_page_number"],
-            "path": heading_path(r),
+            "path": r.get("path") or heading_path(r),
             "clean_text": r["clean_text"],
             "raw_text": r["raw_text"],
             "vector_score": _round(r.get("vector_score", r["score"])),
             "rerank_score": _round(r.get("rerank_score")),
+            "corpus": r["corpus"],
+            "kind": r["kind"],
+            "block_id": r["block_id"],
+            "title": r["title"],
+            "title_path": r["title_path"],
+            "document_title": r["document_title"],
+            "thumbnail_url": r["thumbnail_url"],
+            "image_url": r["image_url"],
         }
         for i, r in enumerate(rows, 1)
     ]
@@ -163,8 +177,9 @@ def answer_question(conn: psycopg.Connection, settings: Settings, models: QaMode
     timings["embed_ms"] = _ms(t)
     t = time.perf_counter()
     n = max(k, settings.search_candidates_n) if models.reranker else k
-    rows = search_theory(conn, settings, vec, n)
+    rows = search_candidates(conn, settings, vec, n)
     timings["vector_ms"] = _ms(t)
+    sources = candidate_sources(rows)  # 리랭크 전 후보 n개의 출처(mixed 확인용)
     vector_top = float(rows[0]["score"]) if rows else None
     rerank_top = None
     if models.reranker and rows and vector_top >= settings.answerable_min_vector_score:
@@ -186,6 +201,8 @@ def answer_question(conn: psycopg.Connection, settings: Settings, models: QaMode
 
     result = {
         "question": question,
+        "corpus": settings.search_corpus,
+        "candidate_sources": sources,
         "zone": zone,
         "zone_reason": reason,
         "scores": {"vector_top": _round(vector_top), "rerank_top": _round(rerank_top)},
@@ -290,11 +307,18 @@ def _generate(settings: Settings, llm: GeminiClient, question: str, evidence: li
 
 
 def _log(conn: psycopg.Connection, settings: Settings, r: dict) -> str | None:
-    """query_logs 1행. 기록 실패는 답변을 막지 않는다(경고만)."""
+    """query_logs 1행. 기록 실패는 답변을 막지 않는다(경고만).
+
+    retrieved_theory_ids(팀 규격 컬럼)에는 theory_chunks id만 넣는다. 블록 근거는 metadata.retrieved_block_ids와
+    evidence[].block_id에 둔다(D-M-033).
+    """
     llm = r.get("llm") or {}
     answer = "\n\n".join(x for x in (r["answer"], r.get("explanation"), r.get("confusions")) if x)
     metadata = {
         "flow": "qa_v1",
+        "corpus": r["corpus"],
+        "candidate_sources": r["candidate_sources"],
+        "retrieved_block_ids": [e["block_id"] for e in r["evidence"] if e["corpus"] != TEAM_TEXT],
         "status": r["status"],
         "zone": r["zone"],
         "zone_reason": r["zone_reason"],
@@ -309,7 +333,8 @@ def _log(conn: psycopg.Connection, settings: Settings, r: dict) -> str | None:
         "timings_ms": r["timings_ms"],
         "evidence": [
             {"n": e["n"], "chunk_id": e["chunk_id"], "page": e["page"], "vector_score": e["vector_score"],
-             "rerank_score": e["rerank_score"], "cited": e["cited"]}
+             "rerank_score": e["rerank_score"], "cited": e["cited"], "corpus": e["corpus"], "kind": e["kind"],
+             "block_id": e["block_id"], "title": e["title"]}
             for e in r["evidence"]
         ],
         "cited": r.get("cited") or [],
@@ -324,7 +349,7 @@ def _log(conn: psycopg.Connection, settings: Settings, r: dict) -> str | None:
         qid = insert_query_log(
             conn, settings,
             question_text=r["question"],
-            retrieved_theory_ids=[e["chunk_id"] for e in r["evidence"]],
+            retrieved_theory_ids=[e["chunk_id"] for e in r["evidence"] if e["corpus"] == TEAM_TEXT],
             answer=answer,
             latency_ms=r["timings_ms"]["total_ms"],
             token_usage=llm.get("usage"),

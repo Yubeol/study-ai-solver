@@ -40,6 +40,10 @@ class EvidenceIn(BaseModel):
     vector_score: float | None = None
     rerank_score: float | None = None
     cited: bool | None = None
+    # 검색 대상 전환(D-M-033)에서 추가. corpus가 common_json이면 chunk_id는 blocks.id
+    corpus: str | None = None
+    kind: str | None = None
+    block_id: str | None = None
 
 
 class ReportCreate(BaseModel):
@@ -57,14 +61,16 @@ class ReportStatusUpdate(BaseModel):
     status: ReportStatus
 
 
-_SNAPSHOT_KEYS = ("n", "chunk_id", "book_title", "page", "path", "raw_text", "vector_score", "rerank_score", "cited")
+_SNAPSHOT_KEYS = ("n", "chunk_id", "book_title", "page", "path", "raw_text", "vector_score", "rerank_score", "cited",
+                  "corpus", "kind", "block_id")
 
 
 def build_snapshot(logged: list[dict], chunks: dict[str, dict], client: list[dict]) -> list[dict]:
     """근거 스냅샷 목록.
 
     - logged: query_logs.metadata.evidence(n, chunk_id, page, 점수, cited). 비어 있으면 화면 값만 쓴다.
-    - chunks: 청크 id → 현재 DB의 청크 정보(get_chunks). 있으면 책 제목·경로·원문을 여기서 채운다.
+    - chunks: 청크 id → 현재 DB의 청크 정보(get_chunks) 또는 블록 정보(get_blocks, path 포함).
+      있으면 책 제목·경로·원문을 여기서 채운다.
     - client: 화면이 보낸 근거. 청크가 없어졌을 때(재적재) 대신 쓴다.
     각 항목의 `source`: db(청크 조회) / client(화면 값) / missing(둘 다 없음, 원문 없음).
     """
@@ -78,7 +84,8 @@ def build_snapshot(logged: list[dict], chunks: dict[str, dict], client: list[dic
         row = chunks.get(str(e.get("chunk_id")))
         fallback = by_id.get(str(e.get("chunk_id"))) or by_n.get(e.get("n"))
         if row is not None:
-            item |= {"book_title": row["book_title"], "path": heading_path(row), "raw_text": row["raw_text"],
+            item |= {"book_title": row["book_title"], "path": row.get("path") or heading_path(row),
+                     "raw_text": row["raw_text"],
                      "page": e.get("page") if e.get("page") is not None else row["printed_page_number"],
                      "source": "db"}
         elif fallback is not None:
@@ -101,7 +108,11 @@ def create_report(body: ReportCreate, conn: Conn, settings: SettingsDep) -> dict
         question = log["question_text"] or question
         answer = log["answer"]
         logged = [e for e in log["evidence"] if isinstance(e, dict)]
-    chunks = reports_repo.get_chunks(conn, settings, [str(e.get("chunk_id")) for e in logged]) if logged else {}
+    # 근거 조회: 블록 근거(block_id 있음, chunk_id = blocks.id)는 blocks에서, 나머지는 theory_chunks에서(D-M-033)
+    chunks = reports_repo.get_chunks(
+        conn, settings, [str(e.get("chunk_id")) for e in logged if not e.get("block_id")]) if logged else {}
+    if block_ids := [str(e.get("chunk_id")) for e in logged if e.get("block_id")]:
+        chunks |= reports_repo.get_blocks(conn, settings, block_ids)
     return reports_repo.insert_report(
         conn,
         settings,

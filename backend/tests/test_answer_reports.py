@@ -111,7 +111,18 @@ def test_build_snapshot_prefers_db_then_client():
 def test_build_snapshot_without_log_uses_client():
     snap = build_snapshot([], {}, [{"n": 1, "chunk_id": "x", "raw_text": "r"}])
     assert snap == [{"n": 1, "chunk_id": "x", "book_title": None, "page": None, "path": None, "raw_text": "r",
-                     "vector_score": None, "rerank_score": None, "cited": None, "source": "client"}]
+                     "vector_score": None, "rerank_score": None, "cited": None, "corpus": None, "kind": None,
+                     "block_id": None, "source": "client"}]
+
+
+def test_build_snapshot_block_evidence_uses_block_path():
+    logged = [{"n": 1, "chunk_id": "u1", "page": "79", "cited": True, "corpus": "common_json", "kind": "table",
+               "block_id": "S2:TABLE:TAB_79_01"}]
+    blocks = {"u1": {"title": "비교 표", "book_title": "책", "printed_page_number": "79", "raw_text": "칸1\n칸2",
+                     "path": "2장 > 비교 표"}}
+    snap = build_snapshot(logged, blocks, [])
+    assert snap[0]["source"] == "db" and snap[0]["path"] == "2장 > 비교 표" and snap[0]["raw_text"] == "칸1\n칸2"
+    assert (snap[0]["corpus"], snap[0]["kind"], snap[0]["block_id"]) == ("common_json", "table", "S2:TABLE:TAB_79_01")
 
 
 def test_pdf_page_count():
@@ -211,6 +222,38 @@ def test_report_create_list_resolve(tables, tmp_path):
 
         r = client.post("/answer-reports", json=REPORT | {"query_log_id": str(uuid4())})
         assert r.status_code == 422 and "query_log_id" in r.json()["detail"]
+
+
+def test_report_snapshot_from_block_evidence(tables, tmp_path, db_conn, settings):
+    """query_logs 근거가 공통 JSON 블록이면 blocks를 조회해 스냅샷을 채운다(D-M-033)."""
+    from app.repositories.query_logs import insert_query_log
+
+    a, s = sql.Identifier(settings.db_app_schema), sql.Identifier(settings.db_schema)
+    block = db_conn.execute(sql.SQL(
+        "SELECT b.id::text, b.block_id, b.printed_page_number::text, b.block_type FROM {}.blocks b "
+        "WHERE b.block_type = 'table' ORDER BY b.block_id LIMIT 1").format(a)).fetchone()
+    if block is None:
+        pytest.skip("블록 없음(공통 JSON 미적재)")
+    bid, block_id, page, kind = block
+    ev = {"n": 1, "chunk_id": bid, "page": page, "vector_score": 0.6, "rerank_score": 0.8, "cited": True,
+          "corpus": "common_json", "kind": kind, "block_id": block_id, "title": "x"}
+    qid = insert_query_log(db_conn, settings, question_text="pytest 블록 근거 신고", retrieved_theory_ids=[],
+                           answer="답", latency_ms=1, token_usage=None,
+                           metadata={"flow": "pytest", "corpus": "common_json", "evidence": [ev]})
+    try:
+        client, _ = _client(tmp_path)
+        with client:
+            r = client.post("/answer-reports", json=REPORT | {"query_log_id": str(qid)})
+            assert r.status_code == 201, r.text
+            tables["reports"].append(UUID(r.json()["id"]))
+        snap = r.json()["evidence_snapshot"][0]
+        assert snap["source"] == "db" and snap["block_id"] == block_id and snap["kind"] == "table"
+        assert isinstance(snap["raw_text"], str) and snap["raw_text"] and " > " in snap["path"]
+        assert snap["page"] == page
+    finally:
+        with db_conn.transaction():
+            db_conn.execute(sql.SQL("DELETE FROM {}.answer_reports WHERE query_log_id = %s").format(a), (qid,))
+            db_conn.execute(sql.SQL("DELETE FROM {}.query_logs WHERE id = %s").format(s), (qid,))
 
 
 def test_supplements_saved_as_pending(tables, tmp_path):

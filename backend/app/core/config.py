@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     # 검색
     search_top_k: int = Field(default=5, gt=0)
     search_candidates_n: int = Field(default=10, gt=0)  # 리랭커에 넘길 벡터 후보 수(리랭커 없으면 안 씀, D-024)
+    # 검색 대상(D-M-033): team_text = theory_chunks만 / common_json = 공통 JSON 블록만 /
+    # mixed = documents(corpus='common_json')에 연결된 book은 블록, 나머지 book은 theory_chunks
+    search_corpus: Literal["team_text", "common_json", "mixed"] = "mixed"
+    # 블록 이미지 URL 틀. {key}에 thumbnail_s3_key / crop_s3_key가 들어간다. 비우면 URL을 만들지 않음(null)
+    asset_url_template: str = ""
 
     # 리랭커 (ARCHITECTURE "검색 단계 상세"). 모델 이름이 비면 리랭크 없이 벡터 순위 그대로. 캐시는 EMBEDDING_MODEL_DIR
     reranker_model: str = ""
@@ -189,6 +194,20 @@ class Settings(BaseSettings):
         if self.judge_can_answer_min > self.judge_confident_min:
             raise ValueError("JUDGE_CAN_ANSWER_MIN은 JUDGE_CONFIDENT_MIN 이하여야 합니다.")
         return self
+
+    @field_validator("asset_url_template")
+    @classmethod
+    def _check_asset_url_template(cls, v: str) -> str:
+        v = v.strip()
+        if v and "{key}" not in v:
+            raise ValueError("ASSET_URL_TEMPLATE에는 {key} 자리표시자가 있어야 합니다.")
+        return v
+
+    def asset_url(self, key: str | None) -> str | None:
+        """저장소 키 → 이미지 URL. 틀이 비었거나 키가 없으면 None."""
+        if not self.asset_url_template or not key:
+            return None
+        return self.asset_url_template.replace("{key}", key)
 
     @property
     def storage_dir(self) -> Path:
