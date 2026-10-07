@@ -4,7 +4,16 @@ from uuid import uuid4
 
 import pytest
 
-from app.retrieval.evaluate import Question, Result, find_rank, parse_questions, summarize
+from app.retrieval.evaluate import (
+    Question,
+    Result,
+    find_rank,
+    format_compare,
+    parse_questions,
+    score_results,
+    select_questions,
+    summarize,
+)
 
 KEYS = {"subject1", "subject2", "subject3"}
 
@@ -88,3 +97,45 @@ def test_summarize_without_unanswerable_questions():
     s = summarize([_r("a", "subject1", 2, 0.6)], k=5, thresholds=[0.4])
     assert s["thresholds"][0]["unanswerable_block"]["rate"] is None
     assert s["top_score"]["unanswerable"] is None
+
+
+def test_select_questions_by_subject():
+    qs = [Question("a", "x", "subject1", ["1"]), Question("c", "x", "subject3", ["2"]), Question("n", "x", "", [])]
+    assert [q.id for q in select_questions(qs, ["subject1", "subject2"])] == ["a", "n"]  # 자료 없음 질문은 남김
+    assert select_questions(qs, None) == qs
+
+
+def test_score_results_zone_and_block_fields(settings):
+    b1 = uuid4()
+    rows = [{"id": uuid4(), "book_id": b1, "printed_page_number": "79", "title": "표", "score": 0.6,
+             "corpus": "common_json", "kind": "table", "block_id": "S2:TABLE:T"}]
+    s = settings.model_copy(update={"answerable_min_vector_score": 0.45})
+    [r] = score_results([Question("q", "x", "subject2", ["79"])], [rows], {"subject2": b1}, settings=s)
+    assert r.rank == 1 and r.zone == "answer"  # 리랭커 없음 → 벡터 하한만(no_reranker)
+    assert (r.top[0]["corpus"], r.top[0]["kind"], r.top[0]["block_id"]) == ("common_json", "table", "S2:TABLE:T")
+    low = [dict(rows[0], score=0.3)]
+    assert score_results([Question("n", "x", "", [])], [low], {}, settings=s)[0].zone == "reject"
+
+
+def test_summarize_zones_kinds_and_compare_table():
+    def res(qid, answerable, zone, kind, rank=None, score=0.5, rr=None):
+        q = Question(qid, "x", "subject1" if answerable else "", ["1"] if answerable else [])
+        return Result(q, rank, score, top=[{"kind": kind}], rerank_top_score=rr, zone=zone)
+
+    results = [res("a", True, "answer", "table", 1, 0.6, 0.9), res("b", True, "gray", "theory", 2, 0.55, 0.1),
+               res("n1", False, "reject", "theory", score=0.4, rr=0.001),
+               res("n2", False, "gray", "visual", score=0.5, rr=0.05)]
+    s = summarize(results, k=5, thresholds=[0.5], rerank_thresholds=[0.1])
+    assert s["zones"]["unanswerable"] == {"n": 2, "reject": 1, "gray": 1, "answer": 0}
+    assert s["zones"]["answerable"] == {"n": 2, "reject": 0, "gray": 1, "answer": 1}
+    assert s["top_kind"] == {"answerable": {"table": 1, "theory": 1}, "unanswerable": {"theory": 1, "visual": 1}}
+    table = format_compare([("team_text", s), ("common_json", s)])
+    assert "| 검색 대상 | 답 가능 n | hit@1 | hit@3 | hit@5 | MRR | 자료 없음 n |" in table
+    assert "| team_text | 2 | 1/2(50%) | 2/2(100%) | 2/2(100%) | 0.75 | 2 | 1/1/0 | 0/1/1 |" in table
+    assert "0.400 / 0.500 / 0.500" in table  # 벡터 1위 · 자료 없음 분포
+    assert "theory 1 · table 0 · visual 1" in table
+
+
+def test_summarize_without_zone_has_no_zone_table():
+    s = summarize([_r("a", "subject1", 1, 0.6)], k=5, thresholds=[0.4])
+    assert "zones" not in s and "| team_text |" in format_compare([("team_text", s)])
