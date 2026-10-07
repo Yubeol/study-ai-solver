@@ -226,6 +226,20 @@ def test_mcq_inconsistent_marks_low_confidence(monkeypatch, qa_settings, logged)
     assert m["consistent"] is False and m["chosen"] == 1 and len(m["reasons"]) == 2
 
 
+def test_computed_answer_is_recorded(monkeypatch, qa_settings, logged):
+    """규칙 9 계산 답은 computed=true로 응답·기록만 하고 확신 낮음은 붙이지 않는다(D-JW-006)."""
+    llm = FakeLlm({"unanswerable": False, "answer": "노드 X의 지니 지수는 0.24이다 [1].", "computed": True,
+                   "explanation": "지니 지수는 1에서 비율의 제곱합을 뺀 값이다 [1].", "confusions": "", "cited": [1]})
+    r = _run(monkeypatch, qa_settings, _rows(), [0.9, 0.5, 0.1], llm)
+    assert (r["status"], r["computed"], r["low_confidence"], r["confidence"]) == ("answered", True, False, "high")
+    assert r["low_confidence_reasons"] == []
+    assert logged[-1]["metadata"]["computed"] is True
+
+    llm = FakeLlm({"unanswerable": False, "answer": "답 [1]", "explanation": "", "confusions": "", "cited": [1]})
+    r = _run(monkeypatch, qa_settings, _rows(), [0.9, 0.5, 0.1], llm)  # computed 없음(이전 응답 형식) → false
+    assert r["computed"] is False and r["low_confidence_reasons"] == []
+
+
 def test_answer_zone_high_confidence_and_log(monkeypatch, qa_settings, logged):
     llm = FakeLlm({"unanswerable": False, "answer": "답 [1]", "explanation": "설명 [2]", "confusions": "구분", "cited": [1, 2]})
     r = _run(monkeypatch, qa_settings, _rows(), [0.9, 0.5, 0.1], llm)

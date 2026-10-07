@@ -196,6 +196,7 @@ def answer_question(conn: psycopg.Connection, settings: Settings, models: QaMode
         "low_confidence": False,
         "low_confidence_reasons": [],
         "mcq_check": None,
+        "computed": False,  # 규칙 9: 근거의 공식에 질문 수치를 대입해 계산한 답(D-JW-006)
         "llm": None,
     }
     if zone == "reject" or (judge_info and judge_info["can_answer"] is False):
@@ -284,7 +285,7 @@ def _generate(settings: Settings, llm: GeminiClient, question: str, evidence: li
         return {"status": "unanswerable", "confidence": "unanswerable", "answer": UNANSWERABLE_TEXT,
                 "explanation": str(data.get("explanation") or ""), "confusions": "", "cited": [],
                 "llm_unanswerable": True, "llm": llm_info}
-    return {"status": "answered", "answer": str(data.get("answer") or ""),
+    return {"status": "answered", "answer": str(data.get("answer") or ""), "computed": data.get("computed") is True,
             "explanation": str(data.get("explanation") or ""), "confusions": str(data.get("confusions") or ""),
             "cited": cited, "llm_unanswerable": False, "llm": llm_info}
 
@@ -305,6 +306,7 @@ def _log(conn: psycopg.Connection, settings: Settings, r: dict) -> str | None:
         "llm_unanswerable": r.get("llm_unanswerable"),
         "judge": r["judge"],
         "mcq_check": r["mcq_check"],
+        "computed": r.get("computed", False),
         "judge_provider": settings.judge_provider,
         "timings_ms": r["timings_ms"],
         "evidence": [
