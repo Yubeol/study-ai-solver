@@ -302,8 +302,8 @@ book 객체:
 ```
 - 엔진은 `.env`의 `PROBLEM_OCR_ENGINE`으로 고릅니다.
   - `google_vision`: Google Cloud Vision `DOCUMENT_TEXT_DETECTION`(`GOOGLE_VISION_API_KEY`, `GOOGLE_VISION_LANGUAGE_HINTS`). 사진의 **글자 전체**를 읽는 순서대로 돌려줍니다. 문제 하나만 골라내거나 선택지를 나누지 않으므로(`choices`는 빈 배열) 위아래 다른 문제 글자는 사용자가 입력칸에서 지웁니다. 사진 1장 = Vision 1단위(월 1,000단위 무료).
-  - `gemini`(기본): Gemini 비전(`PROBLEM_EXTRACT_MODEL`, 프롬프트 `prompts/problem_extract_*`)으로 가장 온전한 문제 1개와 선택지만 옮겨 적습니다(`choices`, `figure_description` 채움). `choices`는 번호 기호 없이 보기 내용만, `text` = 문제 → `[그림·표] 설명` → `① …` 선택지 한 줄씩(번호 기호는 `text`를 만들 때 붙임). Gemini 재시도는 `PROBLEM_OCR_MAX_RETRIES`(기본 1)번만 하고 PaddleOCR로 넘어갑니다.
-- 고른 엔진의 키가 없거나 호출이 실패하면 **PaddleOCR**로 읽습니다(`engine: "paddleocr"`). `fallback_reason`: `vision_not_configured` / `vision_failed` / `llm_not_configured` / `llm_failed`. PaddleOCR은 첫 호출 때 모델을 올려서 느립니다. 프론트는 `/qa`와 별도로 `VITE_OCR_TIMEOUT_SECONDS`(기본 200초)까지 기다립니다.
+  - `gemini`(기본): Gemini 비전(`PROBLEM_EXTRACT_MODEL`, 프롬프트 `prompts/problem_extract_*`)으로 가장 온전한 문제 1개와 선택지만 옮겨 적습니다(`choices`, `figure_description` 채움). `choices`는 번호 기호 없이 보기 내용만, `text` = 문제 → `[그림·표] 설명` → `① …` 선택지 한 줄씩(번호 기호는 `text`를 만들 때 붙임).
+- 고른 엔진의 키가 없거나 호출이 실패하면 **PaddleOCR**로 읽습니다(`engine: "paddleocr"`). `fallback_reason`: `vision_not_configured` / `vision_failed` / `llm_not_configured` / `llm_failed`. PaddleOCR은 첫 호출 때 모델을 올려서 느립니다. 프론트는 `/qa`와 별도로 `VITE_OCR_TIMEOUT_SECONDS`(기본 330초)까지 기다립니다.
 - 프론트 흐름: 사진 → `text`를 "추출된 문제" 칸에 채움 → 사용자가 고침 → `POST /qa`.
 
 오류:

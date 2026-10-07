@@ -55,8 +55,6 @@ class Settings(BaseSettings):
     problem_extract_temperature: float = Field(default=0, ge=0, le=2)
     # /ocr 전용 한도. Gemini 인라인 요청은 20MB까지라 base64(약 1.33배)를 생각해 12MB(MAX_UPLOAD_MB와 별개)
     problem_ocr_max_upload_mb: int = Field(default=12, gt=0)
-    # /ocr의 Gemini 모델별 재시도 횟수(/qa는 GEMINI_MAX_RETRIES). 화면에서 기다리는 요청이라 줄여서 빨리 PaddleOCR로 넘긴다
-    problem_ocr_max_retries: int = Field(default=1, ge=0)
     # 서버 시작 시 임베딩·리랭커를 로드하고 한 번 돌려 둔다(첫 질문 지연 방지). false면 질의 API가 503(지연 로딩 안 함).
     # 테스트(conftest)에서만 false로 둔다.
     preload_models: bool = True

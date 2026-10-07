@@ -30,17 +30,6 @@ export default function QuestionForm({
     setOcrError,
   ] = useState<string | null>(null)
 
-  // OCR이 끝났을 때의 입력칸 값과 직전 OCR 결과(사용자가 입력·수정한 내용은 덮어쓰지 않기 위해)
-  const questionRef =
-      useRef('')
-
-  const lastOcrText =
-      useRef('')
-
-  useEffect(() => {
-    questionRef.current = question
-  }, [question])
-
   const [
     elapsed,
     setElapsed,
@@ -91,52 +80,27 @@ export default function QuestionForm({
     }
   }
 
-  const handleImage = async (
-      file?: File,
-  ) => {
-    if (!file || ocrLoading) {
-      return
-    }
+  // 사진을 고르면 /ocr로 보내 추출한 문제를 아래 입력칸에 채운다(사용자가 고친 뒤 문제 풀기).
+  const handleImage = async (file?: File) => {
+    if (!file) return
 
     if (preview) {
-      URL.revokeObjectURL(
-          preview,
-      )
+      URL.revokeObjectURL(preview)
     }
 
-    setPreview(
-        URL.createObjectURL(
-            file,
-        ),
-    )
-
-    // 사진 → /ocr → "추출된 문제" 칸. 칸이 비었거나 직전 OCR 결과 그대로일 때만 채운다.
+    setPreview(URL.createObjectURL(file))
     setOcrError(null)
     setOcrLoading(true)
 
     try {
       const result = await ocr(file)
-      const current = questionRef.current
-
-      if (
-          !current.trim() ||
-          current === lastOcrText.current
-      ) {
-        setQuestion(result.text)
-        lastOcrText.current = result.text
-      } else {
-        setOcrError('직접 입력한 문제가 있어 사진 결과로 바꾸지 않았어요. 칸을 비우고 다시 사진을 선택하면 채워져요.')
-      }
+      setQuestion(result.text)
 
       if (!result.text) {
         setOcrError('사진에서 글자를 찾지 못했어요. 문제를 직접 입력해주세요.')
       }
     } catch (e) {
-      setOcrError(
-          e instanceof ApiError
-              ? e.message
-              : '문제를 읽지 못했어요.',
-      )
+      setOcrError(e instanceof ApiError ? e.message : '문제를 읽지 못했어요.')
     } finally {
       setOcrLoading(false)
     }
@@ -187,7 +151,6 @@ export default function QuestionForm({
                   type="file"
                   accept="image/png,image/jpeg,image/webp"
                   hidden
-                  disabled={ocrLoading}
                   onChange={(e) =>
                       handleImage(
                           e.target.files?.[0],
@@ -235,7 +198,6 @@ export default function QuestionForm({
               <button
                   type="button"
                   className="secondary-button full-button"
-                  disabled={ocrLoading}
                   onClick={() =>
                       fileRef.current?.click()
                   }
@@ -248,7 +210,6 @@ export default function QuestionForm({
                   type="file"
                   accept="image/png,image/jpeg,image/webp"
                   hidden
-                  disabled={ocrLoading}
                   onChange={(e) =>
                       handleImage(
                           e.target.files?.[0],
@@ -272,7 +233,7 @@ export default function QuestionForm({
 
               {ocrLoading && (
                   <span className="loading-text">
-                    사진에서 문제를 읽는 중…
+                    사진에서 문제를 읽는 중… (처음엔 1분쯤 걸려요)
                   </span>
               )}
             </div>
@@ -324,11 +285,7 @@ export default function QuestionForm({
                 type="button"
                 className="primary-button"
                 onClick={submit}
-                disabled={
-                    loading ||
-                    ocrLoading ||
-                    !question.trim()
-                }
+                disabled={loading || ocrLoading || !question.trim()}
             >
               {loading
                   ? '분석 중…'

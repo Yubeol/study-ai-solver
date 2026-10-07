@@ -6,7 +6,7 @@
 - gemini(기본): Gemini 비전(구조화 출력)으로 사진에서 문제 1개와 선택지만 옮겨 적는다. 기울어지거나 휜 사진,
   위아래에 걸린 다른 문제, 비친 뒷장 글자를 걸러낸다. 모델은 PROBLEM_EXTRACT_MODEL, 프롬프트는 prompts/problem_extract_*.
 - 대체: 고른 엔진의 키가 없거나 호출이 실패하면 업로드 경로의 인쇄체 PaddleOCR로 읽는다(응답 fallback_reason).
-  Gemini는 PROBLEM_OCR_MAX_RETRIES번만 재시도해 빨리 넘긴다. PaddleOCR까지 실패하면 503(직접 입력 안내).
+  PaddleOCR까지 실패하면 503(직접 입력 안내).
 - 크기 한도는 PROBLEM_OCR_MAX_UPLOAD_MB(Gemini 인라인 요청 20MB 제한 때문에 업로드 한도보다 작게).
 - 사진은 저장하지 않는다. 결과 텍스트는 사용자가 화면에서 고친 뒤 `/qa`로 보낸다.
 """
@@ -75,7 +75,6 @@ def _extract_with_gemini(llm: GeminiClient, settings: Settings, data: bytes, mim
         schema=load_json("problem_extract_schema.json"),
         temperature=settings.problem_extract_temperature,
         images=[(data, mime_type)],
-        max_retries=settings.problem_ocr_max_retries,
     )
     d = r.data
     found = d.get("found") is not False

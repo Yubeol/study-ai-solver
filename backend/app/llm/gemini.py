@@ -3,7 +3,6 @@
 - 구조화 출력: generationConfig.responseMimeType="application/json" + responseJsonSchema
   (확인 2026-10-01, https://ai.google.dev/api/generate-content , gemini-3.5-flash-lite 실제 호출로 확인).
 - 429/5xx/시간 초과/JSON 아님 → 같은 모델로 GEMINI_MAX_RETRIES번까지 지수 백오프 재시도.
-  호출마다 max_retries로 바꿀 수 있다(/ocr은 PROBLEM_OCR_MAX_RETRIES로 줄여 빨리 PaddleOCR로 넘김, /qa는 기본값).
   그래도 실패하면 다음 모델(폴백)로 넘어간다. 모든 모델이 실패하면 GeminiError.
 - API 키는 헤더(x-goog-api-key)로만 보내고 로그·예외 메시지에 넣지 않는다.
 - 이미지 입력(선택): user 파트 뒤에 `inlineData {mimeType, data(base64)}` 파트로 붙인다
@@ -61,10 +60,8 @@ class GeminiClient:
         return out
 
     def generate_json(self, models: list[str], system: str, user: str, schema: dict,
-                      temperature: float, images: list[tuple[bytes, str]] | None = None,
-                      max_retries: int | None = None) -> JsonResult:
-        """images: (바이트, MIME 타입) 목록. 텍스트 다음에 붙인다(문서 권장 순서).
-        max_retries: 이 호출의 모델별 재시도 횟수(None이면 GEMINI_MAX_RETRIES)."""
+                      temperature: float, images: list[tuple[bytes, str]] | None = None) -> JsonResult:
+        """images: (바이트, MIME 타입) 목록. 텍스트 다음에 붙인다(문서 권장 순서)."""
         parts: list[dict] = [{"text": user}]
         for data, mime_type in images or []:
             parts.append({"inlineData": {"mimeType": mime_type, "data": base64.b64encode(data).decode("ascii")}})
@@ -79,9 +76,8 @@ class GeminiClient:
         }
         attempts: list[dict] = []
         s = self._settings
-        retries = s.gemini_max_retries if max_retries is None else max(0, max_retries)
         for model in models:
-            for attempt in range(1, retries + 2):
+            for attempt in range(1, s.gemini_max_retries + 2):
                 result, retryable = self._call(model, body)
                 if isinstance(result, JsonResult):
                     result.attempts = attempts
@@ -89,7 +85,7 @@ class GeminiClient:
                 attempts.append({"model": model, "attempt": attempt, "error": result})
                 if not retryable:
                     break
-                if attempt <= retries:
+                if attempt <= s.gemini_max_retries:
                     self._sleep(s.gemini_retry_base_seconds * 2 ** (attempt - 1))
         raise GeminiError("Gemini 호출 실패(모든 모델·재시도)", attempts)
 

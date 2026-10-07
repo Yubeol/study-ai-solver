@@ -150,7 +150,7 @@ const QA_TIMEOUT_SECONDS =
 
 // /ocr 전용(Gemini 재시도 + PaddleOCR 첫 로드까지 기다림). frontend/.env.example 참고
 const OCR_TIMEOUT_SECONDS =
-    Number(import.meta.env.VITE_OCR_TIMEOUT_SECONDS) || 200
+    Number(import.meta.env.VITE_OCR_TIMEOUT_SECONDS) || 330
 
 const CONNECTION_ERROR =
     '서버에 연결할 수 없습니다(백엔드 실행 확인)'
