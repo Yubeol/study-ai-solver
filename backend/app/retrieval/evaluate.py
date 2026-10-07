@@ -6,6 +6,9 @@
     uv run python -m app.retrieval.evaluate --check                           # 질문 파일 형식만 검사(DB·모델 안 씀)
     uv run python -m app.retrieval.evaluate --reranker BAAI/bge-reranker-v2-m3 --n 20   # 리랭커 켜기(RERANKER_MODEL 대신)
     uv run python -m app.retrieval.evaluate --reranker none                   # RERANKER_MODEL이 있어도 벡터만
+    uv run python -m app.retrieval.evaluate --corpus team_text,common_json --subjects subject1,subject2
+        # 검색 대상 여러 개를 같은 질문 임베딩·같은 리랭커로 비교(D-M-033). --subjects는 그 과목의 답 가능 질문 +
+        # 자료에 없는 질문 전부를 고르고, 검색 범위도 그 과목 book(공통 JSON은 documents.book_id)으로 제한한다
 
 - 질문 파일: UTF-8 CSV(BOM 허용), 머리행 `id,question,subject,pages,note`.
   subject는 page_map key(subject1~3), pages는 인쇄 쪽번호(`18|19`). pages가 비면 "자료에 없는 질문".
@@ -15,8 +18,10 @@
 - 리랭커: 벡터 후보 N개를 리랭크한 순서로 순위를 잰다(정답이 후보 N개 밖이면 순위 없음, 순위 깊이 = N).
   리랭커 1위 점수 임계값 표, "확인 불가" 2단계(벡터 1위 하한 × 리랭커 임계값) 표, 질문당 리랭크 시간을 함께 낸다.
   RAM 절약: 질문 임베딩·벡터 검색을 먼저 다 하고 임베딩 모델을 내린 뒤 리랭커를 올린다.
-- 결과: {REPORTS_DIR}/eval/{시각}.json(질문별 상위 결과 전체), .txt(요약), .html(질문별 상위 K개 + 페이지 썸네일,
-  eval_report.py). DB는 읽기만 한다.
+- 적중 판정은 검색 대상과 관계없이 book_id + 인쇄 쪽(블록은 documents.book_id). 질문마다 "확인 불가" 3구간
+  (is_answerable, 기준값은 .env 그대로)과 1위 근거 종류(이론·표·시각자료)도 센다.
+- 결과: {REPORTS_DIR}/eval/{시각}-{검색 대상}.json(질문별 상위 결과 전체), .txt(요약), .html(질문별 상위 K개 +
+  페이지 썸네일, eval_report.py), 검색 대상 비교표 {시각}-compare.txt. DB는 읽기만 한다.
 """
 
 import argparse
@@ -25,12 +30,16 @@ import io
 import json
 import sys
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
 from app.core.config import Settings, get_settings
+
+ZONES = ("reject", "gray", "answer")
+KINDS = ("theory", "table", "visual")
 
 HEADER = ["id", "question", "subject", "pages", "note"]
 HIT_AT = (1, 3)  # K와 함께 보고할 고정 순위
@@ -58,6 +67,7 @@ class Result:
     rerank_top_score: float | None = None  # 리랭커 1위 점수(리랭커 없으면 None)
     vector_rank: int | None = None  # 리랭크 전 벡터 순위(리랭커 없으면 None)
     rerank_seconds: float | None = None  # 이 질문의 리랭크 시간
+    zone: str | None = None  # "확인 불가" 3구간(reject/gray/answer), 설정 없이 계산하면 None
 
 
 def parse_questions(text: str, subject_keys: set[str]) -> list[Question]:
@@ -145,6 +155,13 @@ def summarize(
     def rr_ok(r: Result, t: float) -> bool:
         return r.rerank_top_score is not None and r.rerank_top_score >= t
 
+    def zones(rs: list[Result]) -> dict:
+        c = Counter(r.zone for r in rs)
+        return {"n": len(rs), **{z: c.get(z, 0) for z in ZONES}}
+
+    def top_kinds(rs: list[Result]) -> dict:
+        return dict(Counter(r.top[0].get("kind", "theory") for r in rs if r.top))
+
     out = {
         "k": k,
         "overall": hits(answerable),
@@ -156,7 +173,10 @@ def summarize(
             "unanswerable_n": len(unanswerable),
         },
         "thresholds": [{"threshold": t, **gate(lambda r, t=t: vec_ok(r, t))} for t in thresholds],
+        "top_kind": {"answerable": top_kinds(answerable), "unanswerable": top_kinds(unanswerable)},
     }
+    if any(r.zone for r in results):
+        out["zones"] = {"answerable": zones(answerable), "unanswerable": zones(unanswerable)}
     if any(r.rerank_top_score is not None for r in results):
         rts = rerank_thresholds or []
         out["rerank_top_score"] = {
@@ -222,6 +242,57 @@ def format_summary(summary: dict, config: dict) -> str:
         lines.append("2단계(벡터 1위 ≥ 하한 그리고 리랭커 1위 ≥ 임계값): 하한  임계값  통과(답가능)  통과+적중  차단(자료없음)")
         for t in summary["two_stage"]:
             lines.append(f"  {t['vector_floor']:.2f}  {t['rerank_threshold']:.2f}  {gate_row(t)}")
+    if "zones" in summary:
+        lines.append("\"확인 불가\" 3구간(지금 .env 기준값): " + " / ".join(
+            f"{label} reject {z['reject']} · gray {z['gray']} · answer {z['answer']} (n={z['n']})"
+            for label, z in (("답 가능", summary["zones"]["answerable"]), ("자료 없음", summary["zones"]["unanswerable"]))))
+    tk = summary.get("top_kind")
+    if tk:
+        lines.append("1위 근거 종류: " + " / ".join(
+            f"{label} {_kinds_cell(tk[key])}" for label, key in (("답 가능", "answerable"), ("자료 없음", "unanswerable"))))
+    return "\n".join(lines)
+
+
+def _kinds_cell(counts: dict) -> str:
+    return " · ".join(f"{k} {counts.get(k, 0)}" for k in KINDS)
+
+
+def _range_cell(r: dict | None) -> str:
+    return f"{r['min']:.3f} / {r['median']:.3f} / {r['max']:.3f}" if r else "-"
+
+
+def format_compare(runs: list[tuple[str, dict]]) -> str:
+    """검색 대상별 요약 비교표(같은 질문 세트). runs = [(검색 대상, summarize 결과)].
+
+    표 1: hit@1/3/K·MRR + 자료 없음·답 가능 질문의 3구간 수 / 표 2: 1위 벡터·리랭커 점수 분포(최소/중앙/최대) /
+    표 3: 1위 근거 종류.
+    """
+    if not runs:
+        return ""
+    k = runs[0][1]["k"]
+    ks = sorted({*HIT_AT, k})
+    head = ["검색 대상", "답 가능 n", *(f"hit@{x}" for x in ks), "MRR", "자료 없음 n",
+            "자료 없음 reject/gray/answer", "답 가능 reject/gray/answer"]
+    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for name, s in runs:
+        o, z = s["overall"], s.get("zones")
+        za, zu = (z["answerable"], z["unanswerable"]) if z else (None, None)
+        cells = [name, str(o["n"]), *(_cell(o[f"hit@{x}"]) for x in ks), str(o["mrr"]),
+                 str(s["top_score"]["unanswerable_n"]),
+                 f"{zu['reject']}/{zu['gray']}/{zu['answer']}" if zu else "-",
+                 f"{za['reject']}/{za['gray']}/{za['answer']}" if za else "-"]
+        lines.append("| " + " | ".join(cells) + " |")
+    lines += ["", "1위 점수 분포(최소 / 중앙 / 최대). 기준값: 벡터 하한, 리랭커 하한·상한은 .env 그대로", "",
+              "| 검색 대상 | 벡터 1위 · 답 가능 | 벡터 1위 · 자료 없음 | 리랭커 1위 · 답 가능 | 리랭커 1위 · 자료 없음 |",
+              "|---|---|---|---|---|"]
+    for name, s in runs:
+        ts, rs = s["top_score"], s.get("rerank_top_score") or {}
+        lines.append(f"| {name} | {_range_cell(ts['answerable'])} | {_range_cell(ts['unanswerable'])} | "
+                     f"{_range_cell(rs.get('answerable'))} | {_range_cell(rs.get('unanswerable'))} |")
+    lines += ["", "| 검색 대상 | 1위 근거 종류 · 답 가능 | 1위 근거 종류 · 자료 없음 |", "|---|---|---|"]
+    for name, s in runs:
+        tk = s.get("top_kind") or {}
+        lines.append(f"| {name} | {_kinds_cell(tk.get('answerable', {}))} | {_kinds_cell(tk.get('unanswerable', {}))} |")
     return "\n".join(lines)
 
 
@@ -250,9 +321,14 @@ def score_results(
     book_ids: dict[str, UUID],
     reranker=None,
     rerank_input: str = "embedding_text",
+    settings: Settings | None = None,
 ) -> list[Result]:
-    """질문별 벡터 후보(점수 내림차순)로 정답 순위를 잰다. reranker가 있으면 후보를 리랭크한 순서로 잰다."""
+    """질문별 벡터 후보(점수 내림차순)로 정답 순위를 잰다. reranker가 있으면 후보를 리랭크한 순서로 잰다.
+
+    settings를 주면 질의 흐름과 같은 "확인 불가" 3구간(is_answerable)도 계산한다.
+    """
     from app.retrieval.rerank import rerank
+    from app.retrieval.search import is_answerable
 
     subj_of = {b: key for key, b in book_ids.items()}
     results = []
@@ -274,7 +350,10 @@ def score_results(
                 "subject": subj_of.get(r["book_id"]),
                 "page": r["printed_page_number"],
                 "title": r["title"],
-                "chunk_id": str(r["id"]),
+                "chunk_id": str(r["id"]),  # corpus가 common_json이면 blocks.id
+                "corpus": r.get("corpus", "team_text"),
+                "kind": r.get("kind", "theory"),
+                "block_id": r.get("block_id"),
             }
             top.append(item)
         results.append(
@@ -286,9 +365,17 @@ def score_results(
                 rerank_top_score=rerank_top,
                 vector_rank=vector_rank,
                 rerank_seconds=secs,
+                zone=is_answerable(settings, top_score, rerank_top)[0] if settings else None,
             )
         )
     return results
+
+
+def select_questions(questions: list[Question], subjects: list[str] | None) -> list[Question]:
+    """--subjects: 그 과목의 답 가능 질문 + 자료에 없는 질문 전부. None이면 그대로."""
+    if not subjects:
+        return questions
+    return [q for q in questions if not q.answerable or q.subject in subjects]
 
 
 def run(
@@ -297,18 +384,28 @@ def run(
     fetch: int,
     reranker_model: str | None = None,
     rerank_input: str = "embedding_text",
-) -> tuple[list[Result], dict[str, UUID], dict]:
-    """질문마다 벡터 후보 fetch개를 가져와(+리랭크) 정답 순위를 잰다. 세 번째 값은 리랭커 입력 토큰 통계(없으면 {})."""
+    corpora: tuple[str, ...] = ("team_text",),
+    subjects: list[str] | None = None,
+) -> tuple[dict[str, list[Result]], dict[str, UUID], dict]:
+    """검색 대상마다 질문별 벡터 후보 fetch개를 가져와(+리랭크) 정답 순위를 잰다.
+
+    질문 임베딩은 한 번만 하고, 리랭커도 한 번만 올려 모든 검색 대상에 쓴다(같은 조건 비교).
+    subjects를 주면 검색 범위를 그 과목 book으로 제한한다. 세 번째 값은 검색 대상별 리랭커 입력 토큰 통계.
+    """
     from app.db.connection import connect
     from app.ingestion.embedding import get_embedder, release_embedder, to_pgvector
-    from app.retrieval.search import search_theory
+    from app.retrieval.search import search_candidates
 
     vecs = get_embedder(settings).encode([q.question for q in questions])
     with connect(settings) as conn:
         book_ids = _subject_book_ids(conn, settings)
-        if missing := {q.subject for q in questions if q.subject} - set(book_ids):
+        if missing := ({q.subject for q in questions if q.subject} | set(subjects or [])) - set(book_ids):
             raise SystemExit(f"DB에 반입되지 않은 과목: {sorted(missing)}")
-        candidates = [search_theory(conn, settings, to_pgvector(v), fetch) for v in vecs]
+        scope = [book_ids[s] for s in subjects] if subjects else None
+        candidates = {
+            c: [search_candidates(conn, settings, to_pgvector(v), fetch, c, book_ids=scope) for v in vecs]
+            for c in corpora
+        }
 
     reranker, tokens = None, {}
     if reranker_model:
@@ -316,19 +413,21 @@ def run(
 
         release_embedder()  # RAM: 임베딩 모델과 리랭커를 동시에 올리지 않는다
         reranker = get_reranker(settings, reranker_model)
-        counts = [
-            reranker.count_tokens(q.question, r[rerank_input] or "")
-            for q, rows in zip(questions, candidates, strict=True)
-            for r in rows
-        ]
-        if counts:
-            tokens = {
-                "max": max(counts),
-                "median": sorted(counts)[len(counts) // 2],
-                "over_max_length": sum(c > settings.reranker_max_length for c in counts),
-                "pairs": len(counts),
-            }
-    return score_results(questions, candidates, book_ids, reranker, rerank_input), book_ids, tokens
+        for c in corpora:
+            counts = [
+                reranker.count_tokens(q.question, r[rerank_input] or "")
+                for q, rows in zip(questions, candidates[c], strict=True)
+                for r in rows
+            ]
+            if counts:
+                tokens[c] = {
+                    "max": max(counts),
+                    "median": sorted(counts)[len(counts) // 2],
+                    "over_max_length": sum(x > settings.reranker_max_length for x in counts),
+                    "pairs": len(counts),
+                }
+    results = {c: score_results(questions, candidates[c], book_ids, reranker, rerank_input, settings) for c in corpora}
+    return results, book_ids, tokens
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -345,11 +444,25 @@ def main(argv: list[str] | None = None) -> int:
         default=settings.reranker_input,
         help="리랭커에 넣을 청크 텍스트(기본 RERANKER_INPUT)",
     )
+    ap.add_argument("--corpus", default=settings.search_corpus,
+                    help="검색 대상(team_text / common_json / mixed), 여러 개는 쉼표로(기본 SEARCH_CORPUS)")
+    ap.add_argument("--subjects", default=None,
+                    help="과목 범위(쉼표 구분, 예 subject1,subject2): 그 과목 답 가능 질문 + 자료에 없는 질문, 검색도 그 과목만")
     args = ap.parse_args(argv)
 
     from app.ingestion.team_import import load_map
+    from app.retrieval.search import CORPORA
 
     subject_keys = {c["key"] for c in load_map(settings)["books"]}
+    corpora = tuple(dict.fromkeys(c.strip() for c in args.corpus.split(",") if c.strip()))
+    subjects = [s.strip() for s in args.subjects.split(",") if s.strip()] if args.subjects else None
+    bad_corpora = [c for c in corpora if c not in CORPORA]
+    if bad_corpora or not corpora:
+        print(f"--corpus 값 오류: {bad_corpora or '(비어 있음)'} (가능: {', '.join(CORPORA)})")
+        return 1
+    if subjects and (bad := [s for s in subjects if s not in subject_keys]):
+        print(f"--subjects 값 오류: {bad} (가능: {', '.join(sorted(subject_keys))})")
+        return 1
     try:
         questions = parse_questions(args.questions.read_text(encoding="utf-8"), subject_keys)
     except FileNotFoundError:
@@ -358,63 +471,82 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         print(e)
         return 1
+    questions = select_questions(questions, subjects)
     n_ans = sum(q.answerable for q in questions)
-    print(f"질문 {len(questions)}개(답할 수 있는 질문 {n_ans}, 자료에 없는 질문 {len(questions) - n_ans}): {args.questions}")
+    print(f"질문 {len(questions)}개(답할 수 있는 질문 {n_ans}, 자료에 없는 질문 {len(questions) - n_ans}): {args.questions}"
+          + (f" / 과목 범위 {','.join(subjects)}" if subjects else ""))
     if args.check:
         return 0
 
     reranker = None if args.reranker.lower() == "none" else args.reranker
     depth = max(args.k, args.n) if reranker else max(args.k, settings.eval_rank_depth)
-    results, _, tokens = run(settings, questions, depth, reranker, args.rerank_input)
-    summary = summarize(results, args.k, settings.eval_threshold_list, settings.eval_rerank_threshold_list)
-    config = {
-        "embedding_model": settings.embedding_model,
-        "reranker": (
-            {
-                "model": reranker,
-                "n": args.n,
-                "input": args.rerank_input,
-                "max_length": settings.reranker_max_length,
-                "tokens": tokens,
-            }
-            if reranker
-            else None
-        ),
-        "keyword_search": None,
-        "k": args.k,
-        "rank_depth": depth,
-        "questions": str(args.questions),
-    }
-    text = format_summary(summary, config)
-    print(text)
+    results, _, tokens = run(settings, questions, depth, reranker, args.rerank_input, corpora, subjects)
 
     out_dir = settings.reports_path / "eval"
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    detail = [
-        {
-            **asdict(r.question),
-            "rank": r.rank,
-            "top_score": r.top_score,
-            "rerank_top_score": r.rerank_top_score,
-            "vector_rank": r.vector_rank,
-            "rerank_seconds": r.rerank_seconds,
-            "top": r.top,
+    summaries = []
+    for corpus in corpora:
+        summary = summarize(results[corpus], args.k, settings.eval_threshold_list, settings.eval_rerank_threshold_list)
+        summaries.append((corpus, summary))
+        config = {
+            "corpus": corpus,
+            "subjects": subjects,
+            "embedding_model": settings.embedding_model,
+            "reranker": (
+                {
+                    "model": reranker,
+                    "n": args.n,
+                    "input": args.rerank_input,
+                    "max_length": settings.reranker_max_length,
+                    "tokens": tokens.get(corpus, {}),
+                }
+                if reranker
+                else None
+            ),
+            "answerable_thresholds": {
+                "min_vector": settings.answerable_min_vector_score,
+                "min_rerank": settings.answerable_min_rerank_score,
+                "confident_rerank": settings.answerable_confident_rerank_score,
+            },
+            "keyword_search": None,
+            "k": args.k,
+            "rank_depth": depth,
+            "questions": str(args.questions),
         }
-        for r in results
-    ]
-    (out_dir / f"{stamp}.json").write_text(
-        json.dumps({"config": config, "summary": summary, "questions": detail}, ensure_ascii=False, indent=1),
-        encoding="utf-8",
-    )
-    (out_dir / f"{stamp}.txt").write_text(text + "\n", encoding="utf-8")
-    print(f"리포트: {out_dir / stamp}.json / .txt")
-    try:
-        from app.retrieval.eval_report import write_report
+        text = format_summary(summary, config)
+        print(f"\n===== 검색 대상 {corpus} =====\n{text}")
+        name = f"{stamp}-{corpus}"
+        detail = [
+            {
+                **asdict(r.question),
+                "rank": r.rank,
+                "top_score": r.top_score,
+                "rerank_top_score": r.rerank_top_score,
+                "vector_rank": r.vector_rank,
+                "rerank_seconds": r.rerank_seconds,
+                "zone": r.zone,
+                "top": r.top,
+            }
+            for r in results[corpus]
+        ]
+        (out_dir / f"{name}.json").write_text(
+            json.dumps({"config": config, "summary": summary, "questions": detail}, ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+        (out_dir / f"{name}.txt").write_text(text + "\n", encoding="utf-8")
+        print(f"리포트: {out_dir / name}.json / .txt")
+        try:
+            from app.retrieval.eval_report import write_report
 
-        print(f"HTML 보고서: {write_report(settings, out_dir / f'{stamp}.json')}")
-    except Exception as e:  # noqa: BLE001 - 보고서 실패해도 평가 결과(json/txt)는 남긴다
-        print(f"HTML 보고서 생성 실패({type(e).__name__}: {e}) → 나중에 `python -m app.retrieval.eval_report`로 다시 만들 수 있음")
+            print(f"HTML 보고서: {write_report(settings, out_dir / f'{name}.json')}")
+        except Exception as e:  # noqa: BLE001 - 보고서 실패해도 평가 결과(json/txt)는 남긴다
+            print(f"HTML 보고서 생성 실패({type(e).__name__}: {e}) → 나중에 `python -m app.retrieval.eval_report`로 다시 만들 수 있음")
+
+    compare = format_compare(summaries)
+    print(f"\n===== 검색 대상 비교 =====\n{compare}")
+    (out_dir / f"{stamp}-compare.txt").write_text(compare + "\n", encoding="utf-8")
+    print(f"비교표: {out_dir / stamp}-compare.txt")
     return 0
 
 

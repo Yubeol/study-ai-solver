@@ -121,3 +121,16 @@ def test_summarize_counts():
     assert s["by_subject"]["s1"]["맞음"] == 1 and s["by_subject"]["s1"]["틀림"] == 1
     assert s["by_subject"]["s2"]["미채점"] == 1
     assert s["causes"] == {"검색 실패": ["b"]}
+
+
+def test_subject_filter_and_corpus_label():
+    from app.qa.mcq_run import filter_keys_by_subject, response_corpus, run_label
+
+    cands = {"subject1-p20-1": {"subject": "subject1"}, "subject3-p200-1": {"subject": "subject3"},
+             "subject2-p70-1": {"subject": "subject2"}}
+    assert filter_keys_by_subject(list(cands), cands, "subject1, subject2") == ["subject1-p20-1", "subject2-p70-1"]
+    results = [{"response": {"corpus": "common_json"}}, {"response": None}, {"response": {"corpus": "common_json"}}]
+    assert response_corpus(results) == "common_json"
+    assert response_corpus([{"response": None}]) is None
+    assert run_label("20261008-1", [{"meta": {"corpus": "mixed"}}]) == "20261008-1 [mixed]"
+    assert run_label("old", [{"meta": {}}]) == "old"

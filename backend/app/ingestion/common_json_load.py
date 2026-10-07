@@ -25,6 +25,7 @@ from uuid import UUID
 
 from app.core.config import Settings, get_settings
 from app.ingestion.common_json import (
+    CORPUS,
     BlockPlan,
     CommonJsonError,
     SubjectData,
@@ -36,7 +37,6 @@ from app.ingestion.common_json import (
 )
 
 LOAD_VERSION = "0.1"
-CORPUS = "common_json"
 BLOCK_EMBEDDING_DIM = 1024  # 004 마이그레이션의 blocks.embedding vector(1024)
 EMBED_PROGRESS_BATCH = 32  # 진행 표시 단위(배치 크기는 EMBEDDING_BATCH_SIZE)
 

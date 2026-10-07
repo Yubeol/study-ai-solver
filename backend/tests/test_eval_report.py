@@ -51,3 +51,10 @@ def test_make_thumbnail_resizes_to_width_keeping_ratio():
     assert thumb.shape[:2] == (100, 200)
     small = cv2.imdecode(np.frombuffer(make_thumbnail(buf.tobytes(), 1000), dtype=np.uint8), cv2.IMREAD_COLOR)
     assert small.shape[:2] == (400, 800)  # 작으면 키우지 않음
+
+
+def test_render_html_shows_block_label():
+    data = _data()
+    data["questions"][0]["top"][0] |= {"corpus": "common_json", "kind": "table", "block_id": "S1:TABLE:T<1>"}
+    html = render_html(data, "", "t")
+    assert "[table] S1:TABLE:T&lt;1&gt;" in html

@@ -8,6 +8,8 @@
         → {REPORTS_DIR}/mcq/candidates.json/.md (모든 문제와 파싱 상태·제외 이유)
     (선택 파일 MCQ_SELECTION_PATH에 실행할 문제 key와 그림·표 때문에 뺀 문제를 적는다)
     uv run python -m app.qa.mcq_run run            # 서버를 켠 상태, 요청 간격 MCQ_REQUEST_INTERVAL_SECONDS
+    uv run python -m app.qa.mcq_run run --subjects subject1,subject2   # 과목 제한. 검색 대상은 서버의 SEARCH_CORPUS
+        (서버를 $env:SEARCH_CORPUS='common_json' 처럼 띄워 바꾼다. 결과의 meta.corpus에 응답의 corpus가 남는다)
         → {REPORTS_DIR}/mcq/{시각}.json/.md (자동 채점: 답의 "정답은 ③" 번호 ↔ 정답 번호. 거절·번호 못 뽑음은 "검토 필요")
     uv run python -m app.qa.mcq_run report {시각}.json [--grades {시각}.grades.json] [--baseline 이전.grades.json]
         → 수동 채점(검토 필요 문제, note에 이유)을 자동 채점 위에 덮어 과목별 정답률·원인·비교용 표를 다시 쓴다
@@ -293,6 +295,24 @@ def candidates_markdown(items: list[McqItem]) -> str:
 
 # ---------------------------------------------------------------- run
 
+def filter_keys_by_subject(keys: list[str], cands: dict[str, dict], subjects: str) -> list[str]:
+    """--subjects(쉼표 구분 과목 key)에 해당하는 문제만, 순서 유지."""
+    wanted = {s.strip() for s in subjects.split(",") if s.strip()}
+    return [k for k in keys if cands[k]["subject"] in wanted]
+
+
+def response_corpus(results: list[dict]) -> str | None:
+    """실행한 서버의 검색 대상. 응답마다 같아야 하고, 다르면 쉼표로 이어 표시한다(서버를 도중에 바꾼 경우)."""
+    found = sorted({(r.get("response") or {}).get("corpus") or "team_text" for r in results if r.get("response")})
+    return ",".join(found) or None
+
+
+def run_label(name: str, results: list[dict]) -> str:
+    """비교표의 실행 이름. 검색 대상이 기록돼 있으면 붙인다."""
+    corpus = (results[0].get("meta") or {}).get("corpus") if results else None
+    return f"{name} [{corpus}]" if corpus else name
+
+
 def run_items(settings: Settings, items: list[dict], url: str, interval: float) -> list[dict]:
     results = []
     with httpx.Client(base_url=url, timeout=300) as client:
@@ -404,7 +424,9 @@ def report_markdown(results: list[dict], grades: dict, summary: dict, baseline: 
     lines = ["# 기출 객관식으로 본 답변 품질", ""]
     meta = results[0].get("meta", {}) if results else {}
     if meta:
-        lines += [f"- 실행: {meta.get('run_at')} / 서버 {meta.get('url')} / 요청 간격 {meta.get('interval')}초", ""]
+        lines += [f"- 실행: {meta.get('run_at')} / 서버 {meta.get('url')} / 요청 간격 {meta.get('interval')}초"
+                  f" / 검색 대상 {meta.get('corpus') or '-'}" + (f" / 과목 {meta['subjects']}" if meta.get("subjects") else ""),
+                  ""]
     lines += ["## 요약", "", *summary_table(summary)]
     lines += ["", "맞지 않은 문제 원인: " + (", ".join(f"{c} {len(k)}({', '.join(k)})" for c, k in summary["causes"].items())
                                        or "없음"), ""]
@@ -442,12 +464,18 @@ def report_markdown(results: list[dict], grades: dict, summary: dict, baseline: 
         if r.get("confusions"):
             lines += ["**헷갈리는 개념**:  ", r["confusions"].replace("\n", "  \n"), ""]
         lines.append("**넘긴 근거**: " + ", ".join(
-            f"[{e['n']}] {e['page']}쪽(리랭커 {e['rerank_score']}){' ✔' if e['cited'] else ''}" for e in r["evidence"]))
+            f"[{e['n']}] {e['page']}쪽{_kind_mark(e)}(리랭커 {e['rerank_score']}){' ✔' if e['cited'] else ''}"
+            for e in r["evidence"]))
         lines.append("")
         for c in r["citations"]:
             raw = c["raw_text"].strip().replace("\n", "\n> ")
             lines += [f"**인용 [{c['n']}]** {c['page']}쪽 · {c['path']}", "", f"> {raw}", ""]
     return "\n".join(lines)
+
+
+def _kind_mark(e: dict) -> str:
+    """근거가 표·시각자료 블록이면 종류 표시."""
+    return {"table": " 표", "visual": " 그림"}.get(e.get("kind") or "", "")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -458,6 +486,8 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--url", default="http://127.0.0.1:8000")
     p_run.add_argument("--selection", default=None, help="선택 파일(기본 MCQ_SELECTION_PATH)")
     p_run.add_argument("--keys", default=None, help="선택 파일 대신 key 목록(쉼표 구분)")
+    p_run.add_argument("--subjects", default=None,
+                       help="이 과목 문제만(쉼표 구분, 예 subject1,subject2). 검색 대상은 서버의 SEARCH_CORPUS")
     p_rep = sub.add_parser("report", help="자동 채점 + 수동 채점 파일을 합쳐 요약")
     p_rep.add_argument("result", help="run 결과 json(파일명만 주면 mcq 폴더에서 찾음)")
     p_rep.add_argument("--grades", default=None,
@@ -493,12 +523,19 @@ def main(argv: list[str] | None = None) -> int:
         if bad:
             print(f"파싱 성공 목록에 없는 key: {', '.join(bad)}")
             return 2
+        if args.subjects:
+            keys = filter_keys_by_subject(keys, cands, args.subjects)
+            if not keys:
+                print(f"과목 {args.subjects}에 해당하는 문제가 없습니다.")
+                return 2
         if len(keys) > settings.mcq_max_questions:
             print(f"한 번에 {settings.mcq_max_questions}문제까지(MCQ_MAX_QUESTIONS, Gemini 무료 한도)")
             return 2
         meta = {"run_at": datetime.now().isoformat(timespec="seconds"), "url": args.url,
                 "interval": settings.mcq_request_interval_seconds}
         results = run_items(settings, [cands[k] for k in keys], args.url, settings.mcq_request_interval_seconds)
+        meta["corpus"] = response_corpus(results)  # 서버의 검색 대상(응답의 corpus, D-M-033)
+        meta["subjects"] = args.subjects
         for r in results:
             r["meta"] = meta
         stem = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -593,7 +630,7 @@ def compare_markdown(runs: list[tuple[str, list[dict], dict]], baseline: tuple[s
     lines = ["# 기출 객관식 실행 비교", ""]
     if baseline:
         lines.append(f"- 기준선(수정 전): {baseline[0]}")
-    lines += [f"- 비교 실행: {', '.join(r[0] for r in runs)}", ""]
+    lines += [f"- 비교 실행: {', '.join(run_label(r[0], r[1]) for r in runs)}", ""]
 
     lines += ["## 과목별 정답률", ""]
     subjects = sorted({rec["item"]["subject"] for _, res, _ in allruns for rec in res})
@@ -606,7 +643,7 @@ def compare_markdown(runs: list[tuple[str, list[dict], dict]], baseline: tuple[s
             b = s["by_subject"].get(subj)
             cells.append(f"{b['맞음']}/{b['total']}" if b else "-")
         t = s["total"]
-        label = f"{name}(기준선)" if baseline and name == baseline[0] else name
+        label = run_label(name, res) + ("(기준선)" if baseline and name == baseline[0] else "")
         lines.append(f"| {label} | " + " | ".join(cells) + f" | {t['맞음']}/{t['total']} ({t['맞음'] / t['total']:.0%}) | "
                      f"**{t['틀림']}** | {t['확인 불가']} | {t['답이 모호함']} | {t[REVIEW]} |")
     lines.append("")
