@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import books, health, qa, runs
+from app.api import answer_reports, books, health, qa, runs, supplements
 from app.core.config import get_settings
 from app.db.connection import create_pool
 from app.ingestion.pipeline import DEFAULT_STAGES
@@ -46,6 +46,8 @@ def create_app() -> FastAPI:
     app.include_router(books.router)
     app.include_router(runs.router)
     app.include_router(qa.router)
+    app.include_router(supplements.router)
+    app.include_router(answer_reports.router)
     return app
 
 

@@ -115,6 +115,9 @@ class Settings(BaseSettings):
 
     # 업로드
     max_upload_mb: int = Field(default=20, gt=0)
+    # 보충 이론 등록(POST /supplements, D-JW-004). 파일 크기 한도는 MAX_UPLOAD_MB를 같이 쓴다.
+    supplement_max_text_chars: int = Field(default=20000, gt=0)
+    supplement_max_pdf_pages: int = Field(default=50, gt=0)
 
     # OCR (PaddleOCR, 인쇄체). 모델 이름이 비어 있으면 언어 기본 모델을 쓴다.
     ocr_model_dir: Path | None = None  # PADDLE_PDX_CACHE_HOME으로 전달. 비우면 ~/.paddlex

@@ -364,3 +364,14 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 재원님 브랜치의 D-J-005(공통 JSON 파일을 직접 읽어 visuals를 붙임)는 관계 활용 PR에서 DB(blocks의 S3 키·block_relations)로 바꾸고 응답 형식은 유지한다. 설정 이름 `COMMON_JSON_DIR`(기본 `data/common_json`)은 그 브랜치와 같게 맞췄다.
   - 004를 적용하기 전에는 로컬 DB 테스트 `test_all_migrations_applied`가 실패한다(적용하면 통과, CI는 DB 테스트를 건너뜀).
   - 3과목 공통 JSON이 오면 같은 스크립트로 적재한다. 그때까지 서비스 검색은 1·2과목 블록 + 3과목 theory_chunks를 함께 쓰는 방식이 필요하다(다음 PR의 `mixed`).
+
+## D-JW-004 오류 신고·보충 이론은 mingyu_app 새 테이블 2개로 저장한다 (2026-10-06)
+- 배경: 오류 신고 저장 위치로 `query_logs.metadata`나 `query_logs` jsonb 컬럼을 검토했으나 민규 의견으로 별도 테이블로 정했다. 이유: (1) 배열은 "신고 많은 답변 상위 N개"·"주간 신고 수" 집계와 신고 1건만 처리 완료하기가 번거롭고 동시 기록 시 덮일 수 있다. (2) `query_logs`는 로그 테이블이라 오래된 로그를 정리하면 신고도 지워진다. (3) 1과목 재적재 예정이라 근거가 청크 id로만 남으면 다른 내용을 가리킨다.
+- 확인(코드, 2026-10-06): `qa/service.py`의 기록은 `retrieved_theory_ids`(청크 id 목록)와 `metadata.evidence`(n, chunk_id, page, vector_score, rerank_score, cited)뿐이고 책 제목·제목 경로·원문은 남지 않는다.
+- 결정:
+  - `answer_reports`: query_log_id(FK → query_logs, **ON DELETE SET NULL**), 질문·답 스냅샷, report_type(프론트 오류 신고 값 6개 + 새 `missing_concept`), concept_details, detail, **evidence_snapshot**(신고 시점에 청크를 조회해 책 제목·경로·원문까지 복사, 청크가 없으면 화면이 보낸 evidence), status(open/resolved), resolved_at. 한 답변의 여러 신고는 행을 쌓는다.
+  - `supplements`: 보충 이론(텍스트/이미지/PDF)을 **검토 대기(pending_review)** 로 저장하고 임베딩하지 않는다. report_id(오류 신고 안 첨부) 또는 source=unanswerable("확인 불가" 버튼). 텍스트는 본문, 파일은 저장소 `supplements/{id}.{확장자}` URI. 팀 규격 `books`/`pages`에 넣는 방안은 자료 유형 CHECK(`user_supplement` 없음)과 팀 규격 데이터 수정 문제로 택하지 않았다.
+  - 마이그레이션 파일·PR은 재원, DB 적용은 머지 후 민규(공유 DB 적용 순서 관리).
+- 프론트 요청(수지, PR #4 화면): 오류 신고 시 `query_log_id`와 `evidence` 전송, 유형 `missing_concept`("관련 개념이 부족해요") 추가, 신고 안 보충 이론 첨부와 "확인 불가" 답변의 [이론 보충하기]가 같은 입력 UI로 `POST /supplements` 호출.
+- 프론트 이름에 맞춤(재원 결정, 수지 화면 연동 커밋 12eba19 기준): `/answer-reports`는 `type`과 `report_type`을 모두 받고, `/supplements`는 본문 `content`와 `text`를 모두 받으며 `kind`를 생략하면 파일 유무·형식으로 정한다(PDF 시그니처 `%PDF-` 또는 .pdf → pdf, 그 밖의 파일 → image, 파일 없음 → text). 기존 이름도 계속 받는다.
+- 남은 것: 보충 이론 승인 → 추출·청킹·임베딩(적재 코드 담당과 협의), 관리 화면 검수 목록.
