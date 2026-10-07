@@ -525,6 +525,13 @@ def embedding_text(b: dict, *, with_path: bool = True) -> str:
     return "\n".join(parts)
 
 
+def raw_text_display(raw) -> str:
+    """blocks.raw_text(JSONB) → 화면 표시용 문자열. 이론(문자열)은 그대로, 표·그림(원문 목록)은 줄바꿈으로 잇기만 한다."""
+    if isinstance(raw, list):
+        return "\n".join(str(x) for x in raw)
+    return "" if raw is None else str(raw)
+
+
 def block_from_row(row: dict) -> dict:
     """blocks 테이블 행 → embedding_text 입력(원본 블록과 같은 키). 표는 table_data, 그림 필드는 visual_data에 있다."""
     return {

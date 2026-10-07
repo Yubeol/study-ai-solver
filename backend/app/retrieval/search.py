@@ -26,7 +26,7 @@ from psycopg.rows import dict_row
 
 from app.core.config import Settings, get_settings
 from app.ingestion.common_json import CORPUS as COMMON_JSON
-from app.ingestion.common_json import TITLE_PATH_SEP, block_from_row, embedding_text
+from app.ingestion.common_json import TITLE_PATH_SEP, block_from_row, embedding_text, raw_text_display
 from app.ingestion.embedding import get_embedder, to_pgvector
 
 TEAM_TEXT = "team_text"
@@ -121,7 +121,6 @@ def block_row(settings: Settings, r: dict) -> dict:
     - raw_text: 화면 표시용 문자열. 이론은 원문 그대로, 표·그림(원문 목록)은 줄바꿈으로 잇기만 한다
     - printed_page_number: 이론 청크(pages.printed_page_number, text)와 같게 문자열
     """
-    raw = r["raw_text"]
     return {
         "id": r["id"],
         "kind": r["block_type"],
@@ -130,7 +129,7 @@ def block_row(settings: Settings, r: dict) -> dict:
         "title": r["title"],
         "title_path": list(r["title_path"] or []),
         "path": TITLE_PATH_SEP.join(r["title_path"] or []) or (r["title"] or ""),
-        "raw_text": "\n".join(str(x) for x in raw) if isinstance(raw, list) else ("" if raw is None else str(raw)),
+        "raw_text": raw_text_display(r["raw_text"]),
         "clean_text": embedding_text(block_from_row(r), with_path=False),
         "embedding_text": r["embedding_text"],
         "exam_clues": None,
