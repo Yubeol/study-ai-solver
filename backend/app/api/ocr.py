@@ -1,9 +1,9 @@
 """문제 사진 → 문제 텍스트 API (프론트 QuestionForm의 "추출된 문제" 칸 채우기, D-JW-001~003).
 
 엔진은 PROBLEM_OCR_ENGINE으로 고른다.
-- google_vision(기본): Google Cloud Vision DOCUMENT_TEXT_DETECTION으로 사진 전체 글자를 읽는다(D-JW-003).
+- google_vision: Google Cloud Vision DOCUMENT_TEXT_DETECTION으로 사진 전체 글자를 읽는다(D-JW-003).
   문제 하나만 골라내지는 않으므로 사용자가 입력칸에서 다른 문제 글자를 지운다.
-- gemini: Gemini 비전(구조화 출력)으로 사진에서 문제 1개와 선택지만 옮겨 적는다. 기울어지거나 휜 사진,
+- gemini(기본): Gemini 비전(구조화 출력)으로 사진에서 문제 1개와 선택지만 옮겨 적는다. 기울어지거나 휜 사진,
   위아래에 걸린 다른 문제, 비친 뒷장 글자를 걸러낸다. 모델은 PROBLEM_EXTRACT_MODEL, 프롬프트는 prompts/problem_extract_*.
 - 대체: 고른 엔진의 키가 없거나 호출이 실패하면 업로드 경로의 인쇄체 PaddleOCR로 읽는다(응답 fallback_reason).
 - 사진은 저장하지 않는다. 결과 텍스트는 사용자가 화면에서 고친 뒤 `/qa`로 보낸다.

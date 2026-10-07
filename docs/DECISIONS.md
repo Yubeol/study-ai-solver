@@ -387,8 +387,9 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 이미지 입력: `GeminiClient.generate_json(..., images=[(바이트, MIME)])` → user 텍스트 파트 뒤에 `inlineData {mimeType, data(base64)}` 파트. 확인 2026-10-06: https://ai.google.dev/api/caching#Part (Part.inlineData / Blob), 요청 전체 20MB 이하·텍스트 다음에 이미지 권장 https://ai.google.dev/gemini-api/docs/image-understanding .
 - 비용·한도: 사진 1장당 Gemini 호출 1회(무료 한도 공유). DB는 쓰지 않는다.
 
-## D-JW-003 문제 사진 OCR 기본 엔진은 Google Cloud Vision (2026-10-06, D-JW-002 기본값 변경)
+## D-JW-003 문제 사진 OCR에 Google Cloud Vision 엔진을 추가한다(기본은 gemini) (2026-10-06, 2026-10-07 기본값 변경)
 - 배경: 재원 결정으로 문제 사진 글자 인식은 Google Cloud Vision을 쓴다. Gemini 방식(D-JW-002)은 지우지 않고 `PROBLEM_OCR_ENGINE=gemini`로 고를 수 있게 둔다.
 - 결정: `PROBLEM_OCR_ENGINE`(기본 `google_vision`). Vision은 REST `POST https://vision.googleapis.com/v1/images:annotate`에 `DOCUMENT_TEXT_DETECTION` + `languageHints`(`GOOGLE_VISION_LANGUAGE_HINTS`, 기본 ko)로 보내고 `fullTextAnnotation.text`를 그대로 돌려준다. 키(`GOOGLE_VISION_API_KEY`)는 `x-goog-api-key` 헤더로만 보낸다. 키가 없거나 실패하면 PaddleOCR로 대신 읽는다.
+- 기본값 변경(2026-10-07, PR 전): 처음에는 기본을 `google_vision`으로 했으나 `gemini`로 되돌린다. 팀원 모두 답변용 `GEMINI_API_KEY`가 있고 Vision 키(결제 계정 필요)는 없어서, 기본이 Vision이면 `.env.example`을 복사한 팀원은 매번 PaddleOCR 대체 경로(인식 품질 낮음)로만 돈다. 실제 문제 사진(지니 지수 31번)에서 Gemini가 문제·선택지·그림 설명을 정확히 옮긴 것도 확인했다. Vision은 키를 넣고 `PROBLEM_OCR_ENGINE=google_vision`으로 고른다.
 - 한계: Vision은 사진의 글자를 모두 읽으므로 위아래에 걸린 다른 문제·비친 뒷장 글자가 섞일 수 있다. 문제 1개만 골라내기·선택지 나누기는 하지 않고 사용자가 입력칸에서 고친다.
 - 확인 2026-10-06: 요청·응답 형식 https://docs.cloud.google.com/vision/docs/ocr , 인증("API key or OAuth token") https://docs.cloud.google.com/vision/docs/request , 가격(기능별 월 1,000단위 무료, 이후 1,000단위당 $1.50, **무료 구간도 결제 계정 필요**) https://cloud.google.com/vision/pricing .

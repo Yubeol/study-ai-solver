@@ -45,8 +45,8 @@ class Settings(BaseSettings):
     answer_model: Literal["lite", "strong"] = "lite"  # strong이 재시도 후에도 실패하면 lite로 폴백(D-010)
     # 0 고정(2026-10-01): 실행 간 흔들림을 줄여 비교 가능하게. 0이어도 완전 결정적이라는 보장은 없음(D-025)
     answer_temperature: float = Field(default=0, ge=0, le=2)
-    # 문제 사진 → 문제 텍스트(POST /ocr, D-JW-002·D-JW-003). 엔진이 안 되면 PaddleOCR로 대신 읽는다.
-    problem_ocr_engine: Literal["google_vision", "gemini"] = "google_vision"
+    # 문제 사진 → 문제 텍스트(POST /ocr, D-JW-002·D-JW-003). 기본 gemini(팀 공용 GEMINI_API_KEY), google_vision은 키가 있을 때 선택. 엔진이 안 되면 PaddleOCR로 대신 읽는다.
+    problem_ocr_engine: Literal["google_vision", "gemini"] = "gemini"
     google_vision_api_key: SecretStr = SecretStr("")
     google_vision_language_hints: str = "ko"  # 쉼표로 여러 개(예: ko,en). 비우면 자동 감지
     google_vision_timeout_seconds: float = Field(default=30, gt=0)

@@ -345,7 +345,7 @@ export type OcrResponse = {
   fallback_reason: 'vision_not_configured' | 'vision_failed' | 'llm_not_configured' | 'llm_failed' | null
 }
 
-// 문제 사진 → 문제 텍스트(POST /ocr). Google Vision(기본)·Gemini, 실패하면 PaddleOCR(첫 호출은 모델 로드로 느림).
+// 문제 사진 → 문제 텍스트(POST /ocr). Gemini(기본)·Google Vision, 실패하면 PaddleOCR(첫 호출은 모델 로드로 느림).
 export function ocr(file: File): Promise<OcrResponse> {
   const body = new FormData()
   body.append('file', file)
