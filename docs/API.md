@@ -30,7 +30,7 @@
 | GET | `/block-corrections?status=&block_id=&report_id=&limit=` | 수정안 목록(최신순) |
 | POST | `/block-corrections/{id}/approve` | 승인 = 블록 clean_text 수정 + 재임베딩(바로 검색 반영) |
 | POST | `/block-corrections/{id}/reject`, `/withdraw` | 반려 / 철회(블록 그대로) |
-| POST | `/supplements` | 보충 이론 등록(텍스트/이미지/PDF) → 검토 대기, 임베딩 안 함 |
+| POST | `/supplements` | 보충 이론 등록(텍스트/이미지/PDF). 텍스트는 등록 즉시 임베딩 → 다음 질문부터 검색 후보(D-M-035) |
 | GET | `/supplements?status=&limit=` | 보충 이론 목록(검토 대기는 `pending_review`) |
 
 ## 상태 확인
@@ -129,6 +129,7 @@ book 객체:
 흐름: 질문 임베딩 → 벡터 후보 N개(`SEARCH_CANDIDATES_N`) → 리랭커 → 상위 K개 → "확인 불가" 3구간 → (회색 구간이면 판정기) → Gemini 답변 + 인용 검증 → `query_logs` 기록. 자세한 설계는 ARCHITECTURE "질의 흐름", D-024·D-025·D-028.
 
 검색 대상은 서버 설정 `SEARCH_CORPUS`가 정합니다(요청 값으로 바꾸지 않음, D-M-033): `team_text`(팀 텍스트 이론 청크) / `common_json`(공통 JSON 블록: 이론·표·시각자료) / `mixed`(기본, 공통 JSON이 적재된 교재는 블록, 나머지 교재는 이론 청크).
+**사용자 보충**(D-M-035): `SEARCH_CORPUS`와 상관없이 `POST /supplements`로 등록한 텍스트 보충(`rejected` 제외)도 벡터 후보 N개를 가져와 같은 cosine 점수로 합칩니다(상위 N개 → 리랭커). 기준값·리랭커·프롬프트는 같습니다.
 
 응답(200, 답변한 경우):
 ```json
@@ -173,20 +174,21 @@ book 객체:
 - 검색 대상 전환(D-M-033)으로 **추가된 필드**(기존 필드는 그대로):
   | 필드 | 뜻 |
   |---|---|
-  | `corpus` | `team_text` / `common_json` (이 근거가 나온 곳) |
-  | `kind` | `theory` / `table` / `visual` / `code` / `formula` (`team_text`는 항상 `theory`, 코드·수식은 3과목 블록, D-M-034) |
-  | `block_id` | 공통 JSON 블록 ID(예 `S2:TABLE:TAB_79_01`), `team_text`면 null |
+  | `corpus` | `team_text` / `common_json` / `supplement` (이 근거가 나온 곳, `supplement`는 D-M-035) |
+  | `kind` | `theory` / `table` / `visual` / `code` / `formula` / `supplement` (`team_text`는 항상 `theory`, 코드·수식은 3과목 블록, D-M-034. 사용자 보충은 `supplement`) |
+  | `block_id` | 공통 JSON 블록 ID(예 `S2:TABLE:TAB_79_01`), `team_text`·`supplement`면 null |
   | `title`, `title_path` | 근거 제목, 제목 경로 목록(`path`는 이것을 ` > `로 이은 문자열) |
   | `document_title` | 공통 JSON 문서 제목(`team_text`면 책 제목) |
   | `thumbnail_url`, `image_url` | 표·시각자료 블록의 썸네일·원본 crop URL. 서버 설정 `ASSET_URL_TEMPLATE`이 비어 있거나 이론이면 null |
-- **`evidence[].related_visuals`**(D-JW-008, 추가 필드): 근거가 공통 JSON **이론** 블록일 때 `block_relations`로 연결된 그림·표 목록. 없으면 `[]`(team_text·표·그림 근거도 `[]`).
+- **사용자 보충 근거**(`kind`·`corpus` = `supplement`, D-M-035): `chunk_id` = `mingyu_app.supplements.id`, `block_id` = null, `book_title`·`document_title` = `"사용자 보충"`, **`page` = null**(쪽 번호 없음, LLM 입력에는 `-`), `title`·`path` = 등록할 때 넣은 제목(`title_path`는 `[제목]`, 제목이 없으면 `""`·`[]`), `raw_text` = 입력한 본문 그대로, `thumbnail_url`·`image_url` = null, `related_visuals` = `[]`. Gemini·판정기에는 본문을 그대로 넘깁니다.
+- **`evidence[].related_visuals`**(D-JW-008, 추가 필드): 근거가 공통 JSON **이론** 블록일 때 `block_relations`로 연결된 그림·표 목록. 없으면 `[]`(team_text·표·그림·보충 근거도 `[]`).
   ```json
   [{"block_id": "S2:VISUAL:VIS_78_01", "kind": "visual", "title": "…", "thumbnail_url": "https://…", "image_url": "https://…"}]
   ```
   - 관계 신뢰도 `RELATED_VISUAL_MIN_CONFIDENCE`(0.7) 이상, 근거당 최대 `RELATED_VISUAL_MAX`(3)개, 신뢰도 높은 순. 이미 `evidence`에 있는 블록은 빼고, 이미지 주소를 만들 수 없으면(키 없음·`ASSET_URL_TEMPLATE` 비어 있음) 뺀다.
   - `thumbnail_url`이 없으면 `image_url`로, 반대도 같게 채운다. S3 공개 주소라 `<img src>`로 바로 띄운다.
   - LLM 입력에는 넣지 않는다(화면 표시용). `query_logs.metadata.evidence[].related_visual_ids`에 block_id만 남는다. 조회가 실패해도 답변은 그대로(`[]`).
-- 응답 최상위 `corpus`: 이 요청에 쓴 검색 대상(`SEARCH_CORPUS`). `candidate_sources`: 리랭크 전 벡터 후보 N개가 어느 쪽에서 왔는지 개수(개발 확인용).
+- 응답 최상위 `corpus`: 이 요청에 쓴 검색 대상(`SEARCH_CORPUS`). `candidate_sources`: 리랭크 전 벡터 후보 N개가 어느 쪽에서 왔는지 개수(개발 확인용). 보충이 후보에 들면 `"supplement": 개수`가 붙습니다(없으면 키 없음).
 - `status`:
   | 값 | 뜻 | `answer` |
   |---|---|---|
@@ -216,7 +218,7 @@ book 객체:
 - `mcq_check`(객관식으로 보이는 질문에 답한 경우만, 아니면 null):
   `{is_mcq: true, negative, chosen, option_verdicts: {"1": "적절하다" | "적절하지 않다" | "확인되지 않는다" | "알 수 없음", …}, consistent, reasons: ["사람이 읽는 문장"]}`
 - `llm`·`llm_unanswerable`·`cited`는 개발 확인용입니다. reject 구간이면 `llm`은 null.
-- `query_log_id`: 팀 규격 `query_logs`(`DB_SCHEMA`, 지금 `mingyu.query_logs`)에 남긴 행 id(기록 실패 시 null). `retrieved_theory_ids` 컬럼에는 `team_text` 근거(theory_chunks id)만 들어가고, 블록 근거는 `metadata.retrieved_block_ids`와 `metadata.evidence[].block_id`에 남습니다. `metadata`에는 `corpus`·`candidate_sources`도 있습니다.
+- `query_log_id`: 팀 규격 `query_logs`(`DB_SCHEMA`, 지금 `mingyu.query_logs`)에 남긴 행 id(기록 실패 시 null). `retrieved_theory_ids` 컬럼에는 `team_text` 근거(theory_chunks id)만 들어가고, 블록 근거는 `metadata.retrieved_block_ids`와 `metadata.evidence[].block_id`에, 사용자 보충 근거는 `metadata.retrieved_supplement_ids`(supplements.id 목록)에 남습니다. `metadata`에는 `corpus`·`candidate_sources`도 있습니다.
 
 오류:
 | 코드 | 경우 |
@@ -263,7 +265,7 @@ book 객체:
 }
 ```
 - `evidence_snapshot[].source`: `db`(신고 시점에 청크를 조회해 채움) / `client`(요청의 `evidence`로 채움) / `missing`(둘 다 없음, `raw_text` null). `query_logs`에는 근거가 청크 id·쪽·점수로만 남아 있어서, 재적재 뒤에도 신고 당시 근거를 볼 수 있도록 원문까지 복사합니다.
-- 기록된 근거에 `block_id`가 있으면(검색 대상 `common_json`·`mixed`) `mingyu_app.blocks`에서, 없으면 `theory_chunks`에서 조회합니다(D-M-033). `corpus`·`kind`·`block_id`는 그 전 기록이면 null입니다.
+- 기록된 근거에 `block_id`가 있으면(검색 대상 `common_json`·`mixed`) `mingyu_app.blocks`에서, 없으면 `theory_chunks`에서 조회합니다(D-M-033). `corpus`·`kind`·`block_id`는 그 전 기록이면 null입니다. 사용자 보충 근거는 조회되지 않으므로 화면이 보낸 `evidence` 값(`source: client`)으로 채웁니다.
 
 ### `GET /answer-reports?status=open&limit=50`
 최신순 목록. `status`: `open` / `resolved`(생략하면 전체), `limit`: 1~200(기본 50). 항목 형식은 위 응답과 같습니다.
@@ -281,7 +283,9 @@ book 객체:
 
 ## 보충 이론
 
-저장 위치: `DB_APP_SCHEMA.supplements`(003). **검토 대기(`pending_review`)로만 저장하고 임베딩하지 않습니다.** 승인 → 추출·청킹·임베딩은 별도 작업입니다.
+저장 위치: `DB_APP_SCHEMA.supplements`(003, 임베딩 칸은 006). 상태는 `pending_review`로 저장되지만 **승인 화면이 없어서 `rejected`가 아니면 바로 검색 대상입니다**(D-M-035).
+- **텍스트 보충**: 등록할 때 `"제목\n\n본문"`(제목이 없으면 본문만)을 서버에 올라온 임베더(/qa와 같은 `EMBEDDING_MODEL`, 정규화)로 임베딩해 같은 INSERT로 저장합니다. 다음 `/qa`부터 검색 후보에 들어가 근거로 나올 수 있습니다(`kind=supplement` 근거).
+- **알려진 한계**: 파일만 올린 보충(이미지·PDF, 텍스트 없음)은 **저장만 하고 임베딩하지 않아 검색에 걸리지 않습니다**(사진 이론 OCR 텍스트화는 다음 개선). 긴 본문은 청크로 나누지 않고 한 덩어리로 임베딩합니다(모델 최대 길이 `EMBEDDING_MAX_SEQ_LENGTH` 뒤는 잘림). 인증이 없어 누구나 등록할 수 있고, 잘못 넣은 보충은 지금 DB에서 `status='rejected'`로 바꿔야 빠집니다.
 
 ### `POST /supplements` → 201
 요청: `multipart/form-data`
@@ -295,7 +299,7 @@ book 객체:
 | `report_id` | | 오류 신고 안에서 첨부할 때 `POST /answer-reports` 응답의 `id` |
 | `query_log_id` | | `/qa` 응답의 `query_log_id` |
 | `question` | | 어떤 질문 때문에 넣은 자료인지(0~2000자) |
-| `subject` | | 과목 |
+| `subject` | | 과목(저장만 함, 검색 필터에는 안 씀) |
 
 화면 흐름(오류 신고 안에서 첨부): `POST /answer-reports` → 받은 `id`를 `report_id`로 `POST /supplements`.
 
@@ -306,10 +310,12 @@ book 객체:
   "source": "report", "kind": "pdf", "title": "가치 패러다임 정리", "subject": null, "question_text": "…",
   "content_text": null, "original_filename": "정리.pdf", "mime_type": "application/pdf",
   "byte_size": 182344, "page_count": 3, "status": "pending_review", "review_note": null,
-  "created_at": "2026-10-06T…", "reviewed_at": null
+  "created_at": "2026-10-06T…", "reviewed_at": null,
+  "embedding_model": "BAAI/bge-m3 또는 null", "searchable": false
 }
 ```
-파일은 저장소 `supplements/{id}.{png|jpg|webp|pdf}`에 두며, 저장소 위치(URI)는 응답에 넣지 않습니다.
+파일은 저장소 `supplements/{id}.{png|jpg|webp|pdf}`에 두며, 저장소 위치(URI)와 벡터는 응답에 넣지 않습니다.
+- 추가 필드(D-M-035): `embedding_model`(텍스트 보충을 임베딩한 모델, 파일 보충은 null), `searchable`(지금 검색 후보에 들어가는지 = 벡터 있음 + `rejected` 아님). 목록(`GET`)도 같은 형식입니다.
 
 오류:
 | 코드 | 경우 |
@@ -317,6 +323,9 @@ book 객체:
 | 400 | 텍스트가 비었거나 너무 김 / 파일 없음 / 이미지·PDF가 아님 / PDF 쪽 수 초과 |
 | 413 | `MAX_UPLOAD_MB` 초과 |
 | 422 | `source`·`kind` 값이 틀림 / 없는 `report_id`·`query_log_id` |
+| 503 | 텍스트 보충인데 임베딩 모델 미로드(`PRELOAD_MODELS=false`) |
+
+- 400 메시지: 내용·파일이 모두 없으면 `"보충할 이론 내용을 입력하거나 파일을 선택해 주세요."`, `kind=text`인데 본문이 비었으면 `"보충할 이론 내용을 입력해 주세요."`(`detail`).
 
 ### `GET /supplements?status=pending_review&limit=50`
 최신순 목록. `status`: `pending_review` / `approved` / `rejected`(생략하면 전체), `limit`: 1~200.

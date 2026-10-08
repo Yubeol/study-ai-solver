@@ -1,9 +1,11 @@
 """보충 이론 등록 API (D-JW-004). 오류 신고 안의 첨부와 "확인 불가" 답변의 [이론 보충하기]가 같은 API를 쓴다.
 
 - 프론트 이름도 받는다: 본문 `text`(= `content`), `kind` 생략 시 자동(파일이 PDF면 pdf, 그 밖의 파일은 image, 파일 없으면 text).
-- 텍스트 / 이미지(PNG·JPEG·WEBP) / PDF를 받아 **검토 대기(pending_review)** 로만 저장한다. 임베딩하지 않는다.
+- 텍스트 / 이미지(PNG·JPEG·WEBP) / PDF를 받아 검토 대기(pending_review) 상태로 저장한다.
 - 텍스트는 DB에 본문을, 이미지·PDF는 저장소(`supplements/{id}.{확장자}`)에 원본을 두고 URI를 저장한다.
-- 승인 → 추출·청킹·임베딩은 이 API 범위 밖이다(적재 코드 담당과 협의 후 별도 작업).
+- 텍스트 보충은 등록할 때 "제목\n\n본문"을 서버에 올라온 임베더(/qa와 같은 모델·정규화)로 임베딩해 같이 저장한다.
+  rejected가 아니면 다음 질문부터 검색 후보에 들어간다(승인 화면 없음, D-M-035).
+- 이미지·PDF는 저장만 한다(텍스트가 없어 임베딩하지 않음 → 검색에 안 걸림. OCR 텍스트화는 다음 개선).
 """
 
 from pathlib import PurePath
@@ -12,13 +14,15 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pypdfium2 as pdfium
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 
 from app.api.deps import get_conn, get_settings, get_storage
 from app.core.config import Settings
+from app.ingestion.embedding import to_pgvector
 from app.ingestion.images import InvalidImage, inspect_image
 from app.repositories import answer_reports as reports_repo
 from app.repositories import supplements as supplements_repo
+from app.retrieval.search import supplement_embedding_text
 from app.storage.base import Storage
 
 router = APIRouter(tags=["supplements"])
@@ -66,6 +70,7 @@ def infer_kind(content: str | None, filename: str | None, data: bytes) -> str:
 
 @router.post("/supplements", status_code=status.HTTP_201_CREATED)
 def create_supplement(
+    request: Request,
     conn: Conn,
     settings: SettingsDep,
     storage: StorageDep,
@@ -80,12 +85,13 @@ def create_supplement(
     report_id: Annotated[UUID | None, Form()] = None,
     query_log_id: Annotated[UUID | None, Form()] = None,
 ) -> dict:
-    """보충 자료 1건을 검토 대기로 저장한다."""
+    """보충 자료 1건을 저장한다. 텍스트면 임베딩까지 저장해 바로 검색 대상이 된다(D-M-035)."""
     if report_id is not None and not reports_repo.report_exists(conn, settings, report_id):
         raise HTTPException(422, "report_id에 해당하는 오류 신고가 없습니다.")
 
     supplement_id = uuid4()
     content_text = file_uri = name = mime_type = None
+    emb_text = emb_vec = emb_model = None
     byte_size = page_count = None
     data = b""
     if file is not None:
@@ -97,6 +103,12 @@ def create_supplement(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "보충할 이론 내용을 입력해 주세요.")
         if len(content_text) > settings.supplement_max_text_chars:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"내용은 {settings.supplement_max_text_chars}자 이하로 입력해 주세요.")
+        models = getattr(request.app.state, "qa_models", None)
+        if models is None:
+            raise HTTPException(503, "임베딩 모델이 로드되지 않았습니다(PRELOAD_MODELS=false).")
+        emb_text = supplement_embedding_text(title.strip(), content_text)
+        emb_vec = to_pgvector(models.embedder.encode([emb_text])[0])
+        emb_model = models.embedder.model_name
     else:
         if file is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "파일을 선택해 주세요.")
@@ -124,6 +136,7 @@ def create_supplement(
             supplement_id=supplement_id, report_id=report_id, query_log_id=query_log_id, source=source, kind=kind,
             title=title.strip(), subject=subject, question_text=question, content_text=content_text,
             file_uri=file_uri, original_filename=name, mime_type=mime_type, byte_size=byte_size, page_count=page_count,
+            embedding_text=emb_text, embedding=emb_vec, embedding_model=emb_model,
         )
     except Exception as e:
         if file_uri is not None:

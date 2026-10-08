@@ -277,6 +277,29 @@ def test_block_evidence_and_log(monkeypatch, qa_settings, logged):
     assert m["evidence"][0]["block_id"] == "S2:TABLE:TAB_79_01" and m["evidence"][0]["kind"] == "table"
 
 
+def test_supplement_evidence_and_log(monkeypatch, qa_settings, logged):
+    """사용자 보충 근거(D-M-035): LLM에 본문, 쪽은 "-", 응답 필드 추가, 기록은 retrieved_supplement_ids로 나눈다."""
+    from app.retrieval.search import supplement_row
+
+    sid = uuid4()
+    supp = supplement_row({"id": sid, "title": "보충 제목", "subject": None, "content_text": "보충 본문",
+                           "embedding_text": "보충 제목\n\n보충 본문", "score": 0.8})
+    rows = [supp, theory_row(_rows()[0])]
+    monkeypatch.setattr(service, "search_candidates", lambda conn, st, vec, n, corpus=None, **kw: rows[:n])
+    llm = FakeLlm({"unanswerable": False, "answer": "답 [1]", "explanation": "설명 [1]", "confusions": "", "cited": [1]})
+    r = answer_question(None, qa_settings, QaModels(FakeEmbedder(), FakeReranker([0.9, 0.5]), llm, None), "질문")
+    assert "[1] 과목: 사용자 보충 / 교재 -쪽 / 제목 경로: 보충 제목\n보충 본문" in llm.calls[0]
+    e1 = r["evidence"][0]
+    assert set(e1) >= OLD_EVIDENCE_KEYS and "clean_text" not in e1
+    assert (e1["kind"], e1["corpus"], e1["block_id"], e1["page"]) == ("supplement", "supplement", None, None)
+    assert (e1["title"], e1["document_title"], e1["raw_text"], e1["related_visuals"]) == (
+        "보충 제목", "사용자 보충", "보충 본문", [])
+    assert r["candidate_sources"] == {"supplement": 1, "team_text": 1}
+    m = logged[-1]["metadata"]
+    assert m["retrieved_supplement_ids"] == [str(sid)] and m["retrieved_block_ids"] == []
+    assert logged[-1]["retrieved_theory_ids"] == [r["evidence"][1]["chunk_id"]]
+
+
 def test_llm_unanswerable_and_no_citation(monkeypatch, qa_settings, logged):
     llm = FakeLlm({"unanswerable": True, "answer": "x", "explanation": "근거에 없음", "confusions": "", "cited": [1]})
     r = _run(monkeypatch, qa_settings, _rows(), [0.9, 0.5, 0.1], llm)
