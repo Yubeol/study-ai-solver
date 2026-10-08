@@ -11,6 +11,14 @@ export type Evidence = {
   vector_score: number | null
   rerank_score: number | null
   cited: boolean
+
+  /*
+   * #10 이후 근거 메타데이터
+   * 기존 응답과의 호환을 위해 optional 처리
+   */
+  kind?: 'theory' | 'table' | 'visual' | string | null
+  corpus?: string | null
+  block_id?: string | null
 }
 
 export type JudgeInfo = {
@@ -153,6 +161,68 @@ export type SupplementInput = {
 }
 
 /* =========================
+   이론 블록 수정
+========================= */
+
+export type BlockDetail = {
+  block_id: string
+  kind: string
+  title: string | null
+  title_path: string | null
+  clean_text: string
+}
+
+export type BlockCorrectionStatus =
+  | 'proposed'
+  | 'applied'
+  | 'rejected'
+  | string
+
+export type BlockCorrection = {
+  id: string
+  block_id: string
+  report_id: string | null
+
+  base_clean_text: string
+  base_clean_text_hash: string
+
+  new_clean_text: string
+
+  reason: string | null
+
+  status: BlockCorrectionStatus
+
+  review_note: string | null
+  reviewed_by: string | null
+  applied_note: string | null
+
+  created_at: string
+  reviewed_at: string | null
+  applied_at: string | null
+}
+
+export type CreateBlockCorrectionRequest = {
+  block_id: string
+
+  new_clean_text: string
+
+  reason?: string
+
+  /*
+   * 이번 이론 수정 화면은
+   * 오류 신고와 독립적으로 사용하므로
+   * report_id는 보내지 않는다.
+   */
+  report_id?: string | number
+}
+
+export type ApproveBlockCorrectionRequest = {
+  reviewed_by?: string
+  review_note?: string
+  resolve_report?: boolean
+}
+
+/* =========================
    공통 request
 ========================= */
 
@@ -161,9 +231,10 @@ export class ApiError extends Error {}
 const QA_TIMEOUT_SECONDS =
   Number(import.meta.env.VITE_QA_TIMEOUT_SECONDS) || 60
 
-// /ocr 전용(Gemini 재시도 + PaddleOCR 첫 로드까지 기다림). frontend/.env.example 참고
+// /ocr 전용(Gemini 재시도 + PaddleOCR 첫 로드까지 기다림).
+// frontend/.env.example 참고
 const OCR_TIMEOUT_SECONDS =
-    Number(import.meta.env.VITE_OCR_TIMEOUT_SECONDS) || 330
+  Number(import.meta.env.VITE_OCR_TIMEOUT_SECONDS) || 330
 
 const CONNECTION_ERROR =
   '서버에 연결할 수 없습니다(백엔드 실행 확인)'
@@ -314,8 +385,7 @@ export function createSupplement(
   )
 
   if (
-    input.reportId !==
-      undefined &&
+    input.reportId !== undefined &&
     input.reportId !== null
   ) {
     formData.append(
@@ -359,7 +429,6 @@ export function createSupplement(
   /*
    * FormData를 보낼 때는
    * Content-Type을 직접 지정하지 않는다.
-   *
    * 브라우저가 boundary를 자동 설정한다.
    */
   return request(
@@ -371,19 +440,108 @@ export function createSupplement(
   )
 }
 
-export type OcrResponse = {
-  text: string
-  engine: 'google_vision' | 'gemini' | 'paddleocr'
-  model: string | null
-  problem_text: string
-  choices: string[]
-  figure_description: string
-  fallback_reason: 'vision_not_configured' | 'vision_failed' | 'llm_not_configured' | 'llm_failed' | null
+/* =========================
+   이론 수정 API
+========================= */
+
+export function getBlock(
+  blockId: string,
+): Promise<BlockDetail> {
+  return request<BlockDetail>(
+    `/blocks/${encodeURIComponent(blockId)}`,
+  )
 }
 
-// 문제 사진 → 문제 텍스트(POST /ocr). Gemini(기본)·Google Vision, 실패하면 PaddleOCR(첫 호출은 모델 로드로 느림). 그것도 실패하면 503(직접 입력 안내).
-export function ocr(file: File): Promise<OcrResponse> {
-  const body = new FormData()
-  body.append('file', file)
-  return request<OcrResponse>('/ocr', { method: 'POST', body }, OCR_TIMEOUT_SECONDS)
+export function createBlockCorrection(
+  payload: CreateBlockCorrectionRequest,
+): Promise<BlockCorrection> {
+  return request<BlockCorrection>(
+    '/block-corrections',
+    {
+      method: 'POST',
+
+      headers: {
+        'Content-Type':
+          'application/json',
+      },
+
+      body: JSON.stringify(
+        payload,
+      ),
+    },
+  )
+}
+
+export function approveBlockCorrection(
+  correctionId: string,
+  payload: ApproveBlockCorrectionRequest = {},
+): Promise<BlockCorrection> {
+  return request<BlockCorrection>(
+    `/block-corrections/${encodeURIComponent(correctionId)}/approve`,
+    {
+      method: 'POST',
+
+      headers: {
+        'Content-Type':
+          'application/json',
+      },
+
+      body: JSON.stringify(
+        payload,
+      ),
+    },
+  )
+}
+
+/* =========================
+   OCR
+========================= */
+
+export type OcrResponse = {
+  text: string
+
+  engine:
+    | 'google_vision'
+    | 'gemini'
+    | 'paddleocr'
+
+  model: string | null
+
+  problem_text: string
+
+  choices: string[]
+
+  figure_description: string
+
+  fallback_reason:
+    | 'vision_not_configured'
+    | 'vision_failed'
+    | 'llm_not_configured'
+    | 'llm_failed'
+    | null
+}
+
+// 문제 사진 → 문제 텍스트(POST /ocr).
+// Gemini(기본)·Google Vision,
+// 실패하면 PaddleOCR.
+// 그것도 실패하면 503.
+export function ocr(
+  file: File,
+): Promise<OcrResponse> {
+  const body =
+    new FormData()
+
+  body.append(
+    'file',
+    file,
+  )
+
+  return request<OcrResponse>(
+    '/ocr',
+    {
+      method: 'POST',
+      body,
+    },
+    OCR_TIMEOUT_SECONDS,
+  )
 }
