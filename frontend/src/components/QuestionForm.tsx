@@ -4,11 +4,16 @@ import {
   useState,
 } from 'react'
 
-import { ApiError, ocr } from '../api'
+import {
+  ocr,
+} from '../api'
 
 type Props = {
   loading: boolean
-  onSubmit: (question: string) => void
+
+  onSubmit: (
+    question: string,
+  ) => void
 }
 
 export default function QuestionForm({
@@ -21,16 +26,6 @@ export default function QuestionForm({
   ] = useState('')
 
   const [
-    ocrLoading,
-    setOcrLoading,
-  ] = useState(false)
-
-  const [
-    ocrError,
-    setOcrError,
-  ] = useState<string | null>(null)
-
-  const [
     elapsed,
     setElapsed,
   ] = useState(0)
@@ -38,15 +33,31 @@ export default function QuestionForm({
   const [
     preview,
     setPreview,
-  ] = useState<string | null>(null)
+  ] =
+    useState<string | null>(
+      null,
+    )
 
   const [
-    lastOcrText,
-    setLastOcrText,
-  ] = useState('')
+    ocrLoading,
+    setOcrLoading,
+  ] = useState(false)
+
+  const [
+    ocrError,
+    setOcrError,
+  ] =
+    useState<string | null>(
+      null,
+    )
+
+  const lastOcrTextRef =
+    useRef('')
 
   const fileRef =
-    useRef<HTMLInputElement>(null)
+    useRef<HTMLInputElement>(
+      null,
+    )
 
   useEffect(() => {
     if (!loading) {
@@ -60,14 +71,18 @@ export default function QuestionForm({
       setInterval(() => {
         setElapsed(
           Math.floor(
-            (Date.now() - started) /
-            1000,
+            (
+              Date.now() -
+              started
+            ) / 1000,
           ),
         )
       }, 1000)
 
     return () => {
-      clearInterval(timer)
+      clearInterval(
+        timer,
+      )
 
       setElapsed(0)
     }
@@ -86,84 +101,152 @@ export default function QuestionForm({
     }
   }
 
-  const openFilePicker = () => {
-    if (ocrLoading) {
-      return
-    }
-
-    fileRef.current?.click()
-  }
-
-  const handleImage = async (
-    file?: File,
+  const getOcrText = (
+    result: Awaited<
+      ReturnType<typeof ocr>
+    >,
   ) => {
     if (
-      !file ||
-      ocrLoading
+      result.text?.trim()
     ) {
-      return
+      return result.text.trim()
     }
 
-    if (preview) {
-      URL.revokeObjectURL(
-        preview,
+    const parts: string[] =
+      []
+
+    if (
+      result.problem_text?.trim()
+    ) {
+      parts.push(
+        result.problem_text.trim(),
       )
     }
 
-    setPreview(
-      URL.createObjectURL(
-        file,
-      ),
-    )
+    if (
+      result.choices?.length
+    ) {
+      parts.push(
+        result.choices
+          .filter(
+            (choice) =>
+              choice?.trim(),
+          )
+          .join('\n'),
+      )
+    }
 
-    setOcrError(null)
-    setOcrLoading(true)
+    return parts
+      .filter(Boolean)
+      .join('\n\n')
+      .trim()
+  }
 
-    const questionBeforeOcr =
-      question
+  const handleImage =
+    async (
+      file?: File,
+    ) => {
+      if (
+        !file ||
+        ocrLoading
+      ) {
+        return
+      }
 
-    try {
-      const result =
-        await ocr(file)
-
-      const nextText =
-        result.text ?? ''
-
-      const canReplaceQuestion =
-        questionBeforeOcr.trim() === '' ||
-        questionBeforeOcr === lastOcrText
-
-      if (canReplaceQuestion) {
-        setQuestion(
-          nextText,
-        )
-
-        setLastOcrText(
-          nextText,
-        )
-      } else if (nextText) {
-        setLastOcrText(
-          nextText,
-        )
-
-        setOcrError(
-          '직접 입력하거나 수정한 내용이 있어 OCR 결과로 덮어쓰지 않았어요.',
+      if (preview) {
+        URL.revokeObjectURL(
+          preview,
         )
       }
 
-      if (!nextText) {
-        setOcrError(
-          '사진에서 글자를 찾지 못했어요. 문제를 직접 입력해주세요.',
+      const nextPreview =
+        URL.createObjectURL(
+          file,
         )
-      }
-    } catch (e) {
+
+      setPreview(
+        nextPreview,
+      )
+
+      setOcrLoading(
+        true,
+      )
+
       setOcrError(
-        e instanceof ApiError
-          ? e.message
-          : '문제를 읽지 못했어요.',
+        null,
       )
-    } finally {
-      setOcrLoading(false)
+
+      try {
+        const result =
+          await ocr(file)
+
+        const nextOcrText =
+          getOcrText(
+            result,
+          )
+
+        if (
+          !nextOcrText
+        ) {
+          throw new Error(
+            '이미지에서 문제를 인식하지 못했습니다.',
+          )
+        }
+
+        setQuestion(
+          (
+            currentQuestion,
+          ) => {
+            const current =
+              currentQuestion.trim()
+
+            const previousOcr =
+              lastOcrTextRef.current.trim()
+
+            if (
+              !current ||
+              current ===
+                previousOcr
+            ) {
+              lastOcrTextRef.current =
+                nextOcrText
+
+              return nextOcrText
+            }
+
+            return currentQuestion
+          },
+        )
+      } catch (error) {
+        setOcrError(
+          error instanceof Error
+            ? error.message
+            : '문제 이미지 인식에 실패했습니다.',
+        )
+      } finally {
+        setOcrLoading(
+          false,
+        )
+      }
+    }
+
+  const removeImage =
+    () => {
+      if (
+        ocrLoading
+      ) {
+        return
+      }
+
+      if (preview) {
+        URL.revokeObjectURL(
+          preview,
+        )
+      }
+
+      setPreview(null)
+
+      setOcrError(null)
 
       if (
         fileRef.current
@@ -172,28 +255,17 @@ export default function QuestionForm({
           ''
       }
     }
-  }
 
-  const deleteImage = () => {
-    if (ocrLoading) {
-      return
+  const openFilePicker =
+    () => {
+      if (
+        ocrLoading
+      ) {
+        return
+      }
+
+      fileRef.current?.click()
     }
-
-    if (preview) {
-      URL.revokeObjectURL(
-        preview,
-      )
-    }
-
-    setPreview(null)
-
-    if (
-      fileRef.current
-    ) {
-      fileRef.current.value =
-        ''
-    }
-  }
 
   return (
     <section className="question-column">
@@ -220,7 +292,8 @@ export default function QuestionForm({
           </div>
 
           <h2>
-            문제 이미지를 올려주세요
+            문제 이미지를
+            올려주세요
           </h2>
 
           <p>
@@ -231,14 +304,19 @@ export default function QuestionForm({
           <button
             type="button"
             className="primary-button"
-            disabled={ocrLoading}
-            onClick={(e) => {
-              e.stopPropagation()
+            disabled={
+              ocrLoading
+            }
+            onClick={(
+              event,
+            ) => {
+              event.stopPropagation()
+
               openFilePicker()
             }}
           >
             {ocrLoading
-              ? '문제 읽는 중…'
+              ? '문제 인식 중...'
               : '사진 선택하기'}
           </button>
 
@@ -247,12 +325,17 @@ export default function QuestionForm({
             type="file"
             accept="image/png,image/jpeg,image/webp"
             hidden
-            disabled={ocrLoading}
-            onChange={(e) =>
-              handleImage(
-                e.target.files?.[0],
-              )
+            disabled={
+              ocrLoading
             }
+            onChange={(
+              event,
+            ) => {
+              void handleImage(
+                event.target
+                  .files?.[0],
+              )
+            }}
           />
         </div>
       ) : (
@@ -265,9 +348,11 @@ export default function QuestionForm({
             <button
               type="button"
               className="text-button danger"
-              disabled={ocrLoading}
+              disabled={
+                ocrLoading
+              }
               onClick={
-                deleteImage
+                removeImage
               }
             >
               삭제
@@ -283,13 +368,15 @@ export default function QuestionForm({
           <button
             type="button"
             className="secondary-button full-button"
-            disabled={ocrLoading}
+            disabled={
+              ocrLoading
+            }
             onClick={
               openFilePicker
             }
           >
             {ocrLoading
-              ? '문제 읽는 중…'
+              ? '문제 인식 중...'
               : '다른 이미지 선택'}
           </button>
 
@@ -298,13 +385,32 @@ export default function QuestionForm({
             type="file"
             accept="image/png,image/jpeg,image/webp"
             hidden
-            disabled={ocrLoading}
-            onChange={(e) =>
-              handleImage(
-                e.target.files?.[0],
-              )
+            disabled={
+              ocrLoading
             }
+            onChange={(
+              event,
+            ) => {
+              void handleImage(
+                event.target
+                  .files?.[0],
+              )
+            }}
           />
+
+          {ocrLoading && (
+            <div className="notice muted">
+              이미지에서 문제를
+              인식하고 있습니다.
+              잠시 기다려주세요.
+            </div>
+          )}
+
+          {ocrError && (
+            <div className="notice error">
+              {ocrError}
+            </div>
+          )}
         </div>
       )}
 
@@ -316,38 +422,35 @@ export default function QuestionForm({
             </h2>
 
             <p className="panel-description">
-              잘못 인식된 부분은
-              직접 수정할 수 있어요.
+              {ocrLoading
+                ? 'OCR이 끝나면 내용을 수정할 수 있어요.'
+                : '잘못 인식된 부분은 직접 수정할 수 있어요.'}
             </p>
-
-            {ocrLoading && (
-              <span className="loading-text">
-                사진에서 문제를 읽는 중… (처음엔 1분쯤 걸려요)
-              </span>
-            )}
           </div>
         </div>
-
-        {ocrError && (
-          <div className="notice error">
-            {ocrError}
-          </div>
-        )}
 
         <textarea
           className="question-textarea"
           value={question}
-          onChange={(e) =>
+          disabled={
+            ocrLoading
+          }
+          onChange={(
+            event,
+          ) =>
             setQuestion(
-              e.target.value,
+              event.target.value,
             )
           }
-          onKeyDown={(e) => {
+          onKeyDown={(
+            event,
+          ) => {
             if (
-              e.key === 'Enter' &&
+              event.key ===
+                'Enter' &&
               (
-                e.ctrlKey ||
-                e.metaKey
+                event.ctrlKey ||
+                event.metaKey
               )
             ) {
               submit()
@@ -365,12 +468,21 @@ export default function QuestionForm({
         />
 
         <div className="question-actions">
-          {loading && (
+          {ocrLoading && (
             <span className="loading-text">
-              교재에서 근거를
-              찾는 중… {elapsed}초
+              이미지에서 문제를
+              인식하는 중…
             </span>
           )}
+
+          {!ocrLoading &&
+            loading && (
+              <span className="loading-text">
+                교재에서 근거를
+                찾는 중…{' '}
+                {elapsed}초
+              </span>
+            )}
 
           <button
             type="button"
@@ -384,9 +496,11 @@ export default function QuestionForm({
               !question.trim()
             }
           >
-            {loading
-              ? '분석 중…'
-              : '문제 풀기'}
+            {ocrLoading
+              ? '문제 인식 중…'
+              : loading
+                ? '분석 중…'
+                : '문제 풀기'}
           </button>
         </div>
       </div>
