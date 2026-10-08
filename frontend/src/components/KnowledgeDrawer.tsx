@@ -141,7 +141,7 @@ export default function KnowledgeDrawer({
         setError(null)
 
         try {
-            await createSupplement({
+            const response = await createSupplement({
                 source: 'unanswerable',
 
                 queryLogId:
@@ -161,7 +161,9 @@ export default function KnowledgeDrawer({
             })
 
             alert(
-                '보충 이론이 등록되었습니다.\n검토 후 반영됩니다.',
+                response.searchable
+                    ? '등록됐어요! 같은 질문을 다시 해 보세요.'
+                    : '파일이 저장됐어요. 이미지·PDF는 아직 검색에 반영되지 않아요. 내용을 텍스트로도 입력하면 바로 쓰여요.',
             )
 
             reset()
@@ -211,12 +213,8 @@ export default function KnowledgeDrawer({
 
                 <div className="drawer-body">
                     <div className="knowledge-notice">
-                        <strong>
-                            검토 후 반영됩니다.
-                        </strong>
-
                         <span>
-              등록한 자료는 바로 임베딩되지 않습니다.
+              텍스트로 입력한 이론은 바로 검색에 반영돼서, 같은 질문을 다시 하면 근거로 쓰여요. 이미지·PDF는 저장만 되고 아직 검색에는 쓰이지 않아요.
             </span>
                     </div>
 

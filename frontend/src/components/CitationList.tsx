@@ -380,13 +380,19 @@ function EvidenceCard({
               [{e.n}]
             </span>{' '}
 
-            {e.book_title}
+            {e.kind === 'supplement'
+              ? '사용자 보충'
+              : (
+                <>
+                  {e.book_title}
 
-            {' · '}
+                  {' · '}
 
-            {e.page ?? '?'}
+                  {e.page ?? '?'}
 
-            쪽
+                  쪽
+                </>
+              )}
 
             {e.path && (
               <div className="ev-path">

@@ -517,7 +517,7 @@ export function createAnswerReport(
 
 export function createSupplement(
   input: SupplementInput,
-): Promise<unknown> {
+): Promise<{ searchable: boolean }> {
   const formData =
     new FormData()
 
