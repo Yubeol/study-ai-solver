@@ -1279,3 +1279,145 @@ a.cite {
     flex-direction: column;
   }
 }
+
+/* =========================
+   HISTORY
+========================= */
+
+.history-page {
+  width: 100%;
+  max-width: 900px;
+
+  margin: 0 auto;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+
+  gap: 20px;
+
+  margin-bottom: 18px;
+}
+
+.history-header h1 {
+  margin: 0 0 5px;
+
+  font-size: 24px;
+  letter-spacing: -0.7px;
+}
+
+.history-header p {
+  margin: 0;
+
+  color: var(--muted);
+
+  font-size: 13px;
+}
+
+.history-count {
+  flex-shrink: 0;
+
+  padding: 6px 9px;
+
+  border: 1px solid var(--border);
+  border-radius: 6px;
+
+  background: #ffffff;
+
+  color: var(--muted);
+
+  font-size: 11px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+
+  gap: 10px;
+}
+
+.history-card {
+  width: 100%;
+
+  padding: 16px;
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+
+  background: #ffffff;
+
+  text-align: left;
+}
+
+.history-card:hover {
+  border-color: #b8c7da;
+
+  background: #fafcff;
+}
+
+.history-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+
+  gap: 16px;
+}
+
+.history-card-top strong {
+  min-width: 0;
+
+  overflow: hidden;
+
+  color: var(--text);
+
+  font-size: 14px;
+  line-height: 1.55;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-card-top span {
+  flex-shrink: 0;
+
+  color: var(--muted);
+
+  font-size: 10px;
+}
+
+.history-answer {
+  margin: 9px 0 12px;
+
+  overflow: hidden;
+
+  color: var(--text-soft);
+
+  font-size: 12px;
+  line-height: 1.65;
+
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.history-card-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  padding-top: 9px;
+
+  border-top: 1px solid #edf0f3;
+
+  color: var(--muted);
+
+  font-size: 10px;
+}
+
+.history-card-bottom span:last-child {
+  color: var(--accent-text);
+
+  font-weight: 600;
+}
