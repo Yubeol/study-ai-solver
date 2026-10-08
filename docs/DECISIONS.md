@@ -501,3 +501,20 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   1위 근거 종류(common_json): 답 가능 이론 7 · 표 3, 자료 없음 이론 5 · 표 1 · 그림 1. 코드·수식이 1위인 질문은 없음(33문항에 코드 질문이 없음).
 - **알려진 위험 n08**(자료 없음 경계 사례 "Mean Shift 군집…"): 리랭커 1위 `S3:THEORY:TH_337_01`(DBSCAN 장·단점) 0.463으로 상한 0.15를 넘어 **answer 구간** 진입(team_text는 0.131로 gray). 처음 평가에서 "자료 없음 answer가 늘지 않을 것" 기준에 걸려 3과목 블록을 지웠다가, 다른 지표가 모두 좋아졌고 경계 사례 1문항이라 LLM 판단을 확인하고 다시 적재했다(사용자 결정). /qa 1회(Gemini 1회, query_log `25fddb34…`): zone answer, **status unanswerable, llm_unanswerable=true**, 답 "자료에서 확인 불가 — 근거에는 K-평균·DBSCAN·혼합분포·타당성 지표는 있으나 Mean Shift가 군집을 찾는 방법은 없다". 마지막 안전장치(LLM 판단)가 막았지만 3구간 단계에서는 거르지 못한다.
 - 마감 후 할 일: 리랭커 상한 `ANSWERABLE_CONFIDENT_RERANK_SCORE` 0.15(하한 0.03)는 1·2과목 중심 33문항 기준 잠정값 → 3과목 블록 기준으로 재조정(경계 사례 추가). D-JW-007 길이 한도: 3과목 이론 clean_text 최대 1,563자(중앙값 178자)로 "1,300자 초과 시 재검토" 조건에 해당(현재 한도 2,000자 안이라 동작에는 문제 없음).
+
+## D-M-035 텍스트 보충 이론은 등록 즉시 임베딩해 검색 후보에 합친다(rejected만 제외) — 006 마이그레이션 (2026-10-08, `feat/supplement-search`)
+- 배경: 강사님 요구 "자료에 이론이 없어 답을 못 하면 사용자가 이론을 입력해 적재·임베딩 후 답 생성". 지금까지 보충(D-JW-004)은 `mingyu_app.supplements`에 `pending_review`로 저장만 되고 임베딩하지 않아 검색에 걸리지 않았다. 마감일이라 최소 범위로 하고, 검색 기준값·리랭커·프롬프트는 바꾸지 않는다.
+- 조사(2026-10-08): supplements 18칸에 임베딩 칸 없음, 행 0. ARCHITECTURE 처음 설계(보충 book·page + `material_type=user_supplement`)는 팀 규격 데이터 수정이라 D-JW-004에서 택하지 않았다. 프론트 보충 Drawer(`createSupplement`)는 `source`·`query_log_id`·`title`·`text`·`file`을 보내고 `subject`는 보내지 않는다. /qa에는 과목 필터가 없다(`book_ids`는 평가 `--subjects`용).
+- 결정:
+  - **006 마이그레이션**(`006_mingyu_supplement_embedding.sql`, 2026-10-08 민규 적용): supplements에 `embedding_text text`, `embedding vector(1024)`, `embedding_model text` 추가 + 부분 HNSW 인덱스(`status <> 'rejected' AND embedding IS NOT NULL`). 기존 칸은 그대로.
+  - **등록**: 텍스트 보충만 `"제목\n\n본문"`(제목이 없으면 본문만)을 서버에 올라온 임베더(`app.state.qa_models.embedder`, /qa와 같은 `EMBEDDING_MODEL`·정규화)로 임베딩해 같은 INSERT 한 문장으로 저장한다. 모델이 로드되지 않았으면 503(빈 텍스트 400이 먼저). 400 메시지는 기존 문구 그대로. 응답에 `embedding_model`·`searchable` 추가.
+  - **검색 대상 상태**: 승인 화면이 없으므로 **`rejected`를 뺀 전부**(`pending_review`·`approved`)가 등록 즉시 검색 대상이다. 상태값은 `pending_review` 그대로 저장한다(나중에 승인 화면을 만들면 조건만 바꾸면 됨).
+  - **합치기**: `search_candidates`가 `SEARCH_CORPUS`와 상관없이 보충 N개를 가져와 기존 후보와 cosine 점수로 합쳐 상위 N개 → 리랭커(같은 점수면 교재 먼저). book 범위(`book_ids`)를 주면 보충은 넣지 않는다(어느 book에도 속하지 않고, 화면은 과목을 보내지 않아 같은 과목인지 알 수 없음).
+  - **근거 표시**: `kind`·`corpus` = `supplement`, `block_id` = null, `book_title`·`document_title` = "사용자 보충", `page` = null(LLM 입력은 `-`), `title`·`path` = 제목, `raw_text` = 본문, `related_visuals` = `[]`. Gemini·판정기에는 본문을 `clean_text` 자리로 넘긴다. 기존 응답 필드는 그대로.
+  - **기록**: `query_logs.metadata.retrieved_supplement_ids`(supplements.id) 추가, `candidate_sources`에 `supplement` 개수(후보에 있을 때). `retrieved_block_ids`는 이제 `corpus=common_json`인 근거만 모은다(보충의 null이 섞이지 않게).
+- 알려진 한계:
+  - **파일만 올린 보충(이미지·PDF)은 임베딩하지 않고 저장만 한다 → 검색에 걸리지 않는다.** 사진 이론 OCR 텍스트화는 다음 개선.
+  - **인증이 없다**: 누구나 등록할 수 있고 등록 즉시 모든 사용자의 검색 후보가 된다. 잘못된 보충은 지금 DB에서 `status='rejected'`로 바꿔야 빠진다(관리 화면 없음).
+  - 긴 본문은 청크로 나누지 않고 한 덩어리로 임베딩한다(`EMBEDDING_MAX_SEQ_LENGTH` 뒤는 잘림).
+  - `EMBEDDING_MODEL`을 바꾸면 보충도 다시 임베딩해야 한다(`embedding_model` 칸으로 구분 가능, 재임베딩 스크립트는 없음).
+  - 신고 스냅샷(D-JW-004)은 보충 근거를 DB에서 조회하지 않고 화면이 보낸 `evidence` 값으로 채운다.

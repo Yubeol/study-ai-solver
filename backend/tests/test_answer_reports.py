@@ -2,11 +2,13 @@
 
 - 요청 검증·근거 스냅샷 조립은 DB 없이 돈다(get_conn을 가짜로 바꿈).
 - 저장 테스트는 공유 DB + 003 마이그레이션이 필요하다. 테이블이 없으면 건너뛴다. 만든 행·파일은 끝날 때 지운다.
+- 텍스트 보충은 등록 때 임베딩한다(D-M-035). 테스트는 실제 모델 대신 가짜 임베더(단위 벡터)를 app.state에 넣는다.
 """
 
 from io import BytesIO
 from uuid import UUID, uuid4
 
+import numpy as np
 import pypdfium2 as pdfium
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +19,7 @@ from app.api.answer_reports import build_snapshot
 from app.api.deps import get_conn, get_storage
 from app.api.supplements import infer_kind, pdf_page_count
 from app.main import create_app
+from app.qa.service import QaModels
 from app.storage.local import LocalStorage
 
 REPORT = {
@@ -41,6 +44,23 @@ def _pdf(pages: int = 2) -> bytes:
     pdf.save(buf)
     pdf.close()
     return buf.getvalue()
+
+
+class FakeEmbedder:
+    """모든 입력에 같은 단위 벡터(i번째 칸 1). 정규화된 bge-m3 벡터와 같은 차원."""
+
+    model_name = "pytest-fake-embedder"
+
+    def __init__(self, dim: int = 1024, i: int = 11):
+        self.vec = np.zeros(dim, dtype=np.float32)
+        self.vec[i] = 1.0
+
+    def encode(self, texts):
+        return np.tile(self.vec, (len(texts), 1))
+
+
+def _fake_models(embedder=None) -> QaModels:
+    return QaModels(embedder or FakeEmbedder(), None, None, None)
 
 
 def _no_db_client(tmp_path=None) -> TestClient:
@@ -153,6 +173,17 @@ def test_supplement_validation(tmp_path, form, files, code):
     assert not (tmp_path / "저장소").exists()  # 검증 실패면 파일을 저장하지 않는다
 
 
+def test_supplement_text_needs_loaded_embedder(tmp_path):
+    """텍스트 보충은 임베딩 모델이 없으면 저장하지 않는다(503). 빈 텍스트는 그보다 먼저 400."""
+    with _no_db_client(tmp_path) as client:
+        r = client.post("/supplements", data={"source": "unanswerable", "text": "보충 본문"})
+        assert r.status_code == 503 and "임베딩 모델" in r.json()["detail"]
+        r = client.post("/supplements", data={"source": "unanswerable", "text": " "})
+        assert r.status_code == 400 and r.json()["detail"] == "보충할 이론 내용을 입력하거나 파일을 선택해 주세요."
+        r = client.post("/supplements", data={"source": "unanswerable", "kind": "text", "content": " "})
+        assert r.status_code == 400 and r.json()["detail"] == "보충할 이론 내용을 입력해 주세요."
+
+
 def test_supplement_pdf_page_limit(tmp_path, settings):
     app = create_app()
     app.dependency_overrides[get_conn] = lambda: None
@@ -185,10 +216,11 @@ def tables(db_conn, settings):
             db_conn.execute(sql.SQL("DELETE FROM {}.answer_reports WHERE id = ANY(%s)").format(a), (created["reports"],))
 
 
-def _client(tmp_path):
+def _client(tmp_path, embedder=None):
     app = create_app()
     storage = LocalStorage(tmp_path / "저장소")
     app.dependency_overrides[get_storage] = lambda: storage
+    app.state.qa_models = _fake_models(embedder)  # lifespan은 PRELOAD_MODELS=false라 덮어쓰지 않는다
     return TestClient(app), storage
 
 
@@ -235,7 +267,7 @@ def test_report_snapshot_from_block_evidence(tables, tmp_path, db_conn, settings
     from app.repositories.query_logs import insert_query_log
 
     a, s = sql.Identifier(settings.db_app_schema), sql.Identifier(settings.db_schema)
-    block = db_conn.execute(sql.SQL(
+    block =db_conn.execute(sql.SQL(
         "SELECT b.id::text, b.block_id, b.printed_page_number::text, b.block_type FROM {}.blocks b "
         "WHERE b.block_type = 'table' ORDER BY b.block_id LIMIT 1").format(a)).fetchone()
     if block is None:
@@ -275,13 +307,15 @@ def test_supplements_saved_as_pending(tables, tmp_path):
         text = r.json()
         tables["supplements"].append(UUID(text["id"]))
         assert text["status"] == "pending_review" and text["kind"] == "text" and text["report_id"] == report["id"]
-        assert "file_uri" not in text
+        assert "file_uri" not in text and "embedding" not in text
+        assert text["searchable"] is True and text["embedding_model"] == "pytest-fake-embedder"
 
         r = client.post("/supplements", data={"source": "unanswerable", "kind": "image"},
                         files={"file": ("메모.png", _png(), "image/png")})
         image = r.json()
         tables["supplements"].append(UUID(image["id"]))
         assert image["mime_type"] == "image/png" and image["original_filename"] == "메모.png"
+        assert image["searchable"] is False and image["embedding_model"] is None  # 파일 보충은 저장만
         assert storage.read(f"local://supplements/{image['id']}.png") == _png()
 
         r = client.post("/supplements", data={"source": "unanswerable"},  # 프론트처럼 kind 생략
@@ -307,3 +341,33 @@ def test_supplements_saved_as_pending(tables, tmp_path):
     assert sorted(p.name for p in (tmp_path / "저장소" / "supplements").iterdir()) == sorted(
         [f"{image['id']}.png", f"{pdf['id']}.pdf"]
     )  # 실패한 등록의 파일은 지운다
+
+
+def test_supplement_registered_then_found_by_qa(tables, tmp_path, db_conn, settings, monkeypatch):
+    """보충 등록 → 같은 질문(같은 벡터) 검색 → 보충이 후보·근거에 나온다. query_logs 기록도 확인 후 지운다."""
+    from app.qa import service
+    from app.qa.service import answer_question
+
+    if db_conn.execute("SELECT 1 FROM information_schema.columns WHERE table_schema = %s AND table_name = 'supplements' "
+                       "AND column_name = 'embedding'", (settings.db_app_schema,)).fetchone() is None:
+        pytest.skip("supplements.embedding 없음(006 미적용)")
+    embedder = FakeEmbedder(settings.embedding_dim, 11)
+    client, _ = _client(tmp_path, embedder)
+    with client:
+        r = client.post("/supplements", data={"source": "unanswerable", "title": "pytest 보충 제목",
+                                              "text": "pytest 보충 본문"})
+    assert r.status_code == 201, r.text
+    sid = r.json()["id"]
+    tables["supplements"].append(UUID(sid))
+    a = sql.Identifier(settings.db_app_schema)
+    stored = db_conn.execute(sql.SQL("SELECT embedding_text, embedding IS NOT NULL FROM {}.supplements WHERE id = %s")
+                             .format(a), (sid,)).fetchone()
+    assert stored == ("pytest 보충 제목\n\npytest 보충 본문", True)
+
+    logged = []
+    monkeypatch.setattr(service, "insert_query_log", lambda conn, st, **kw: logged.append(kw) or uuid4())
+    st = settings.model_copy(update={"search_top_k": 3, "answerable_min_vector_score": 0.45})
+    res = answer_question(db_conn, st, _fake_models(embedder), "pytest 질문")
+    assert res["evidence"][0]["chunk_id"] == sid and res["evidence"][0]["kind"] == "supplement"
+    assert res["evidence"][0]["raw_text"] == "pytest 보충 본문" and res["candidate_sources"]["supplement"] >= 1
+    assert sid in logged[-1]["metadata"]["retrieved_supplement_ids"]

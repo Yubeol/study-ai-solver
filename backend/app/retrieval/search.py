@@ -3,6 +3,8 @@
 - common_json: 공통 JSON 블록(mingyu_app.v_searchable_blocks, D-M-032)
 - mixed: documents(corpus='common_json')에 연결된 book은 블록, 나머지 book은 이론 청크. 각각 후보 N개를 가져와
   cosine 점수(같은 bge-m3 정규화 벡터)로 합친 뒤 상위 N개. 과목 목록은 설정에 없다(공통 JSON을 적재하면 자동 전환).
+- 사용자 보충(D-M-035): 검색 대상과 상관없이 mingyu_app.supplements(rejected 제외, 벡터 있는 텍스트 보충)에서도 N개를
+  가져와 같은 cosine 점수로 합친다. book 범위(book_ids)를 주면 보충은 어느 book에도 속하지 않으므로 넣지 않는다.
 
 벡터 후보 → (RERANKER_MODEL이 있으면) 리랭커 → 상위 K개. "확인 불가" 판단(벡터 하한 + 리랭커 3구간)은 is_answerable.
 search_candidates는 두 대상의 행을 같은 모양(kind·corpus·block_id·path·raw_text 문자열 등)으로 맞춰 돌려준다.
@@ -30,6 +32,8 @@ from app.ingestion.common_json import TITLE_PATH_SEP, block_display_text, block_
 from app.ingestion.embedding import get_embedder, to_pgvector
 
 TEAM_TEXT = "team_text"
+SUPPLEMENT = "supplement"
+SUPPLEMENT_LABEL = "사용자 보충"  # 보충 근거의 책 제목·문서 제목 표시
 Corpus = Literal["team_text", "common_json", "mixed"]
 CORPORA = ("team_text", "common_json", "mixed")
 
@@ -75,6 +79,17 @@ def search_blocks(conn: psycopg.Connection, settings: Settings, query_vec: str, 
     ).format(a=sql.Identifier(settings.db_app_schema), s=sql.Identifier(settings.db_schema), where=where)
     with conn.cursor(row_factory=dict_row) as cur:
         return cur.execute(q, (query_vec, COMMON_JSON, *params, query_vec, k)).fetchall()
+
+
+def search_supplements(conn: psycopg.Connection, settings: Settings, query_vec: str, k: int) -> list[dict]:
+    """사용자 보충(rejected 제외, 벡터 있는 행 = 텍스트 보충)을 cosine 거리 순으로 k개(D-M-035)."""
+    q = sql.SQL(
+        "SELECT id, title, subject, content_text, embedding_text, 1 - (embedding <=> %s::public.vector) AS score "
+        "FROM {a}.supplements WHERE status <> 'rejected' AND embedding IS NOT NULL "
+        "ORDER BY embedding <=> %s::public.vector LIMIT %s"
+    ).format(a=sql.Identifier(settings.db_app_schema))
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(q, (query_vec, query_vec, k)).fetchall()
 
 
 def common_json_book_ids(conn: psycopg.Connection, settings: Settings) -> set[UUID]:
@@ -144,6 +159,39 @@ def block_row(settings: Settings, r: dict) -> dict:
     }
 
 
+def supplement_row(r: dict) -> dict:
+    """보충 행 → 이론 청크와 같은 모양. 본문을 그대로 raw_text(표시)·clean_text(LLM·판정기 입력)로 쓴다.
+
+    쪽 번호·book은 없다(None). 제목 경로 자리에는 사용자가 붙인 제목을 둔다.
+    """
+    title = r["title"] or ""
+    return {
+        "id": r["id"],
+        "kind": SUPPLEMENT,
+        "corpus": SUPPLEMENT,
+        "block_id": None,
+        "title": title,
+        "title_path": [title] if title else [],
+        "path": title,
+        "raw_text": r["content_text"],
+        "clean_text": r["content_text"],
+        "embedding_text": r["embedding_text"],
+        "exam_clues": None,
+        "printed_page_number": None,
+        "book_id": None,
+        "book_title": SUPPLEMENT_LABEL,
+        "document_title": SUPPLEMENT_LABEL,
+        "thumbnail_url": None,
+        "image_url": None,
+        "score": r["score"],
+    }
+
+
+def supplement_embedding_text(title: str, content: str) -> str:
+    """보충 임베딩 입력 = "제목\\n\\n본문"(이론 청크의 "제목 경로\\n\\nclean_text"와 같은 모양). 제목이 없으면 본문만."""
+    return f"{title}\n\n{content}" if title else content
+
+
 def merge_candidates(groups: list[list[dict]], n: int) -> list[dict]:
     """여러 대상의 후보를 벡터 점수 내림차순으로 합쳐 n개. 같은 점수는 groups 순서(안정 정렬)."""
     merged = [r for g in groups for r in g]
@@ -161,8 +209,17 @@ def search_candidates(conn: psycopg.Connection, settings: Settings, query_vec: s
     """검색 대상에 맞춰 벡터 후보 n개(점수 내림차순, 같은 모양의 행).
 
     book_ids를 주면 그 book 범위만 검색한다(평가 --subjects). mixed는 각 대상에서 n개씩 가져와 합친다.
+    book_ids가 없으면 사용자 보충 n개도 가져와 합친다(D-M-035, 같은 점수면 교재 먼저).
     """
-    corpus = corpus or settings.search_corpus
+    rows = _corpus_candidates(conn, settings, query_vec, n, corpus or settings.search_corpus, book_ids)
+    if book_ids is not None:
+        return rows
+    supplements = [supplement_row(r) for r in search_supplements(conn, settings, query_vec, n)]
+    return merge_candidates([rows, supplements], n) if supplements else rows
+
+
+def _corpus_candidates(conn: psycopg.Connection, settings: Settings, query_vec: str, n: int, corpus: str,
+                       book_ids: Collection[UUID] | None) -> list[dict]:
     if corpus == TEAM_TEXT:
         return [theory_row(r) for r in search_theory(conn, settings, query_vec, n, book_ids=book_ids)]
     if corpus == COMMON_JSON:
