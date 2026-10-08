@@ -26,7 +26,7 @@ from psycopg.rows import dict_row
 
 from app.core.config import Settings, get_settings
 from app.ingestion.common_json import CORPUS as COMMON_JSON
-from app.ingestion.common_json import TITLE_PATH_SEP, block_from_row, embedding_text, raw_text_display
+from app.ingestion.common_json import TITLE_PATH_SEP, block_display_text, block_from_row, embedding_text
 from app.ingestion.embedding import get_embedder, to_pgvector
 
 TEAM_TEXT = "team_text"
@@ -65,7 +65,7 @@ def search_blocks(conn: psycopg.Connection, settings: Settings, query_vec: str, 
     where = sql.SQL("").join(sql.SQL(" AND ") + c for c in conds)
     q = sql.SQL(
         "SELECT b.id, b.block_id, b.block_type, b.title, b.title_path, b.raw_text, b.clean_text, b.table_data, "
-        "  b.visual_data, b.embedding_text, b.thumbnail_s3_key, b.crop_s3_key, b.printed_page_number, d.book_id, "
+        "  b.visual_data, b.source, b.embedding_text, b.thumbnail_s3_key, b.crop_s3_key, b.printed_page_number, d.book_id, "
         "  coalesce(bk.title, d.title) AS book_title, d.title AS document_title, "
         "  1 - (b.embedding <=> %s::public.vector) AS score "
         "FROM {a}.v_searchable_blocks b JOIN {a}.documents d ON d.id = b.document_id "
@@ -118,7 +118,8 @@ def block_row(settings: Settings, r: dict) -> dict:
 
     - clean_text: LLM·판정기에 넘기는 본문 = embedding_text(with_path=False). 이론은 clean_text,
       표는 [표] 제목 + 행, 그림은 [그림] 제목 + 설명 + 구조 + 그림 속 글자(제목 경로는 path로 따로)
-    - raw_text: 화면 표시용 문자열. 이론은 원문 그대로, 표·그림(원문 목록)은 줄바꿈으로 잇기만 한다
+    - raw_text: 화면 표시용 문자열. 이론은 원문 그대로, 표·그림(원문 목록)은 줄바꿈으로 잇기만 한다.
+      원문이 비면 코드는 clean_code, 수식은 plain_text(D-M-034)
     - printed_page_number: 이론 청크(pages.printed_page_number, text)와 같게 문자열
     """
     return {
@@ -129,7 +130,7 @@ def block_row(settings: Settings, r: dict) -> dict:
         "title": r["title"],
         "title_path": list(r["title_path"] or []),
         "path": TITLE_PATH_SEP.join(r["title_path"] or []) or (r["title"] or ""),
-        "raw_text": raw_text_display(r["raw_text"]),
+        "raw_text": block_display_text(r),
         "clean_text": embedding_text(block_from_row(r), with_path=False),
         "embedding_text": r["embedding_text"],
         "exam_clues": None,

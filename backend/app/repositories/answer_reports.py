@@ -8,7 +8,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.core.config import Settings
-from app.ingestion.common_json import TITLE_PATH_SEP, raw_text_display
+from app.ingestion.common_json import TITLE_PATH_SEP, block_display_text
 
 _COLUMNS = sql.SQL(
     "id, query_log_id, question_text, answer_text, report_type, concept_details, detail, "
@@ -59,7 +59,7 @@ def get_blocks(conn: psycopg.Connection, settings: Settings, ids: list[str]) -> 
     if not uuids:
         return {}
     q = sql.SQL(
-        "SELECT b.id, b.title, b.title_path, b.raw_text, b.printed_page_number, "
+        "SELECT b.id, b.block_type, b.title, b.title_path, b.raw_text, b.source, b.printed_page_number, "
         "  coalesce(bk.title, d.title) AS book_title "
         "FROM {a}.blocks b JOIN {a}.documents d ON d.id = b.document_id LEFT JOIN {s}.books bk ON bk.id = d.book_id "
         "WHERE b.id = ANY(%s)"
@@ -71,7 +71,7 @@ def get_blocks(conn: psycopg.Connection, settings: Settings, ids: list[str]) -> 
             "title": r["title"],
             "book_title": r["book_title"],
             "printed_page_number": str(r["printed_page_number"]),
-            "raw_text": raw_text_display(r["raw_text"]),
+            "raw_text": block_display_text(r),
             "path": TITLE_PATH_SEP.join(r["title_path"] or []) or r["title"],
         }
         for r in rows

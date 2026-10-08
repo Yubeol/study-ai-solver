@@ -39,7 +39,7 @@ from uuid import UUID
 from app.core.config import Settings, get_settings
 
 ZONES = ("reject", "gray", "answer")
-KINDS = ("theory", "table", "visual")
+KINDS = ("theory", "table", "visual", "code", "formula")
 
 HEADER = ["id", "question", "subject", "pages", "note"]
 HIT_AT = (1, 3)  # K와 함께 보고할 고정 순위

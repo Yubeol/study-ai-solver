@@ -174,7 +174,7 @@ def test_db_block_text_rebuilds_stored_embedding_text(db_conn, settings):
 
     with db_conn.cursor(row_factory=dict_row) as cur:
         rows = cur.execute(sql.SQL(
-            "SELECT block_id, block_type, title, title_path, clean_text, raw_text, table_data, visual_data, "
+            "SELECT block_id, block_type, title, title_path, clean_text, raw_text, table_data, visual_data, source, "
             "embedding_text FROM {a}.blocks").format(a=sql.Identifier(settings.db_app_schema))).fetchall()
     if not rows:
         pytest.skip("블록 없음")
