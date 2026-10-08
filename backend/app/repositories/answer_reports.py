@@ -12,7 +12,7 @@ from app.ingestion.common_json import TITLE_PATH_SEP, raw_text_display
 
 _COLUMNS = sql.SQL(
     "id, query_log_id, question_text, answer_text, report_type, concept_details, detail, "
-    "evidence_snapshot, status, created_at, resolved_at"
+    "evidence_snapshot, status, created_at, resolved_at, resolution, resolution_note, linked_block_ids, reviewed_by"
 )
 
 
@@ -122,6 +122,37 @@ def set_status(conn: psycopg.Connection, settings: Settings, report_id: UUID, st
     ).format(a=sql.Identifier(settings.db_app_schema), cols=_COLUMNS)
     with conn.cursor(row_factory=dict_row) as cur:
         return cur.execute(q, (status, status, report_id)).fetchone()
+
+
+def update_review(
+    conn: psycopg.Connection,
+    settings: Settings,
+    report_id: UUID,
+    *,
+    status: str | None,
+    resolution: str | None,
+    resolution_note: str | None,
+    linked_block_ids: list[str] | None,
+    reviewed_by: str | None,
+) -> dict | None:
+    """처리 결과 갱신(005, D-JW-007). None인 값은 그대로 둔다. resolved면 resolved_at = now(), open이면 NULL.
+    resolved인데 resolution이 없으면 DB CHECK(answer_reports_resolution_required)에 걸린다."""
+    q = sql.SQL(
+        "UPDATE {a}.answer_reports SET "
+        "status = coalesce(%(status)s::text, status), "
+        "resolved_at = CASE WHEN coalesce(%(status)s::text, status) = 'resolved' THEN coalesce(resolved_at, now()) "
+        "  ELSE NULL END, "
+        "resolution = coalesce(%(resolution)s::text, resolution), "
+        "resolution_note = coalesce(%(resolution_note)s::text, resolution_note), "
+        "linked_block_ids = coalesce(%(linked)s::jsonb, linked_block_ids), "
+        "reviewed_by = coalesce(%(reviewed_by)s::text, reviewed_by) "
+        "WHERE id = %(id)s RETURNING {cols}"
+    ).format(a=sql.Identifier(settings.db_app_schema), cols=_COLUMNS)
+    params = {"status": status, "resolution": resolution, "resolution_note": resolution_note,
+              "linked": Jsonb(linked_block_ids) if linked_block_ids is not None else None,
+              "reviewed_by": reviewed_by, "id": report_id}
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(q, params).fetchone()
 
 
 def report_exists(conn: psycopg.Connection, settings: Settings, report_id: UUID) -> bool:
