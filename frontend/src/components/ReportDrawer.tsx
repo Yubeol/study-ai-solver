@@ -6,6 +6,7 @@ import {
     createAnswerReport,
     createSupplement,
     type AnswerReportType,
+    type ConceptDetail,
     type QaResponse,
 } from '../api'
 
@@ -21,6 +22,28 @@ type SupplementType =
     | 'text'
     | 'image'
     | 'pdf'
+
+const CONCEPT_DETAILS: {
+    value: ConceptDetail
+    title: string
+}[] = [
+    {
+        value: 'unrelated_concept',
+        title: '관련 없는 개념',
+    },
+    {
+        value: 'wrong_location',
+        title: '근거 위치 오류',
+    },
+    {
+        value: 'explanation_mismatch',
+        title: '근거 내용과 해설 불일치',
+    },
+    {
+        value: 'other',
+        title: '기타',
+    },
+]
 
 const REPORTS: {
     value: AnswerReportType
@@ -78,15 +101,26 @@ const REPORTS: {
 ]
 
 export default function ReportDrawer({
-                                         open,
-                                         result,
-                                         onClose,
-                                     }: Props) {
-    const [type, setType] =
-        useState<AnswerReportType | null>(null)
+    open,
+    result,
+    onClose,
+}: Props) {
+    const [
+        type,
+        setType,
+    ] = useState<AnswerReportType | null>(
+        null,
+    )
 
-    const [detail, setDetail] =
-        useState('')
+    const [
+        conceptDetails,
+        setConceptDetails,
+    ] = useState<ConceptDetail[]>([])
+
+    const [
+        detail,
+        setDetail,
+    ] = useState('')
 
     const [
         supplementType,
@@ -132,12 +166,15 @@ export default function ReportDrawer({
 
     const dirty =
         type !== null ||
+        conceptDetails.length > 0 ||
         detail.trim() !== '' ||
         supplementTitle.trim() !== '' ||
         hasSupplement
 
     const reset = () => {
         setType(null)
+
+        setConceptDetails([])
 
         setDetail('')
 
@@ -153,9 +190,7 @@ export default function ReportDrawer({
     }
 
     const requestClose = () => {
-        if (
-            submitting
-        ) {
+        if (submitting) {
             return
         }
 
@@ -173,12 +208,52 @@ export default function ReportDrawer({
         onClose()
     }
 
+    const handleReportType = (
+        nextType: AnswerReportType,
+    ) => {
+        setType(nextType)
+
+        /*
+         * concept_details는
+         * wrong_concept일 때만 사용한다.
+         *
+         * 다른 신고 유형으로 바꾸면
+         * 기존 선택값을 비운다.
+         */
+        if (
+            nextType !== 'wrong_concept'
+        ) {
+            setConceptDetails([])
+        }
+
+        setSubmitError(null)
+    }
+
+    const toggleConceptDetail = (
+        value: ConceptDetail,
+    ) => {
+        setConceptDetails(
+            (current) =>
+                current.includes(value)
+                    ? current.filter(
+                        (item) =>
+                            item !== value,
+                    )
+                    : [
+                        ...current,
+                        value,
+                    ],
+        )
+    }
+
     const handleSupplementType = (
         next: SupplementType,
     ) => {
         setSupplementType(next)
 
         setSupplementFile(null)
+
+        setSubmitError(null)
     }
 
     const submit = async () => {
@@ -198,6 +273,10 @@ export default function ReportDrawer({
             return
         }
 
+        /*
+         * 텍스트 자료에서 제목을 작성했다면
+         * 실제 내용도 입력해야 한다.
+         */
         if (
             showSupplement &&
             supplementType === 'text' &&
@@ -217,67 +296,84 @@ export default function ReportDrawer({
 
         try {
             /*
-              1. 오류 신고 먼저 저장
-            */
+             * 1. 오류 신고 등록
+             *
+             * wrong_concept일 때만
+             * concept_details 값을 보낸다.
+             *
+             * 나머지는 빈 배열을 보낸다.
+             */
 
             const report =
                 await createAnswerReport({
                     query_log_id:
-                    result.query_log_id,
+                        result.query_log_id,
 
-                    report_type: type,
+                    report_type:
+                        type,
+
+                    concept_details:
+                        type ===
+                        'wrong_concept'
+                            ? conceptDetails
+                            : [],
 
                     detail:
-                        detail.trim() || undefined,
+                        detail.trim() ||
+                        undefined,
 
                     question:
-                    result.question,
+                        result.question,
 
                     answer:
-                    result.answer,
+                        result.answer,
 
                     explanation:
-                    result.explanation,
+                        result.explanation,
 
                     evidence:
-                    result.evidence,
+                        result.evidence,
                 })
 
             /*
-              2. 보충 이론이 있으면
-                 방금 받은 report id로 연결
-            */
+             * 2. 보충 이론이 실제로 입력된 경우
+             * 방금 등록된 신고 id에 연결한다.
+             */
 
             if (
                 showSupplement &&
                 hasSupplement
             ) {
                 await createSupplement({
-                    source: 'report',
+                    source:
+                        'report',
 
                     reportId:
-                    report.id,
+                        report.id,
 
                     queryLogId:
-                    result.query_log_id,
+                        result.query_log_id,
 
                     title:
-                    supplementTitle,
+                        supplementTitle,
 
                     text:
-                        supplementType === 'text'
+                        supplementType ===
+                        'text'
                             ? supplementText
                             : undefined,
 
                     file:
-                        supplementType === 'text'
+                        supplementType ===
+                        'text'
                             ? null
                             : supplementFile,
                 })
             }
 
             alert(
-                showSupplement && hasSupplement
+                showSupplement &&
+                hasSupplement
                     ? '신고와 보충 이론이 등록되었습니다.\n검토 후 반영됩니다.'
                     : '오류 신고가 등록되었습니다.',
             )
@@ -313,7 +409,8 @@ export default function ReportDrawer({
                         </h2>
 
                         <p>
-                            문제가 있는 부분을 선택해주세요.
+                            문제가 있는 부분을
+                            선택해주세요.
                         </p>
                     </div>
 
@@ -328,47 +425,130 @@ export default function ReportDrawer({
                 </div>
 
                 <div className="drawer-body">
+                    {/* =========================
+                        신고 유형
+                    ========================= */}
+
                     <div className="report-list">
-                        {REPORTS.map((item) => (
-                            <label
-                                key={item.value}
-                                className={
-                                    type === item.value
-                                        ? 'report-card selected'
-                                        : 'report-card'
-                                }
-                            >
-                                <input
-                                    type="radio"
-                                    name="report-type"
-                                    checked={
-                                        type === item.value
+                        {REPORTS.map(
+                            (item) => (
+                                <label
+                                    key={
+                                        item.value
                                     }
-                                    onChange={() =>
-                                        setType(item.value)
+                                    className={
+                                        type ===
+                                        item.value
+                                            ? 'report-card selected'
+                                            : 'report-card'
                                     }
-                                />
+                                >
+                                    <input
+                                        type="radio"
+                                        name="report-type"
+                                        checked={
+                                            type ===
+                                            item.value
+                                        }
+                                        onChange={() =>
+                                            handleReportType(
+                                                item.value,
+                                            )
+                                        }
+                                    />
 
-                                <span>
-                  <strong>
-                    {item.title}
-                  </strong>
+                                    <span>
+                                        <strong>
+                                            {
+                                                item.title
+                                            }
+                                        </strong>
 
-                  <small>
-                    {item.description}
-                  </small>
-                </span>
-                            </label>
-                        ))}
+                                        <small>
+                                            {
+                                                item.description
+                                            }
+                                        </small>
+                                    </span>
+                                </label>
+                            ),
+                        )}
                     </div>
 
+                    {/* =========================
+                        개념/근거 세부 항목
+
+                        wrong_concept에서만 표시
+                        여러 개 선택 가능
+                    ========================= */}
+
+                    {type ===
+                        'wrong_concept' && (
+                        <section className="concept-detail-section">
+                            <div className="concept-detail-heading">
+                                <strong>
+                                    어떤 부분이
+                                    이상한가요?
+                                </strong>
+
+                                <span>
+                                    복수 선택 가능
+                                </span>
+                            </div>
+
+                            <div className="concept-detail-list">
+                                {CONCEPT_DETAILS.map(
+                                    (item) => (
+                                        <label
+                                            key={
+                                                item.value
+                                            }
+                                            className={
+                                                conceptDetails.includes(
+                                                    item.value,
+                                                )
+                                                    ? 'concept-detail-card selected'
+                                                    : 'concept-detail-card'
+                                            }
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={
+                                                    conceptDetails.includes(
+                                                        item.value,
+                                                    )
+                                                }
+                                                onChange={() =>
+                                                    toggleConceptDetail(
+                                                        item.value,
+                                                    )
+                                                }
+                                            />
+
+                                            <span>
+                                                {
+                                                    item.title
+                                                }
+                                            </span>
+                                        </label>
+                                    ),
+                                )}
+                            </div>
+                        </section>
+                    )}
+
+                    {/* =========================
+                        상세 내용
+                    ========================= */}
+
                     <label className="detail-input">
-            <span>
-              상세 내용
-              <small>
-                {' '}선택
-              </small>
-            </span>
+                        <span>
+                            상세 내용
+                            <small>
+                                {' '}
+                                선택
+                            </small>
+                        </span>
 
                         <textarea
                             value={detail}
@@ -386,6 +566,13 @@ export default function ReportDrawer({
                         </small>
                     </label>
 
+                    {/* =========================
+                        보충 이론
+
+                        wrong_concept
+                        missing_concept
+                    ========================= */}
+
                     {showSupplement && (
                         <section className="report-supplement">
                             <div className="report-supplement-heading">
@@ -394,14 +581,16 @@ export default function ReportDrawer({
                                 </strong>
 
                                 <span>
-                  선택
-                </span>
+                                    선택
+                                </span>
                             </div>
 
                             <p className="report-supplement-description">
-                                관련 자료가 있다면 함께 등록해주세요.
-                                등록된 자료는 바로 반영되지 않으며
-                                검토 후 반영됩니다.
+                                관련 자료가 있다면
+                                함께 등록해주세요.
+                                등록된 자료는 바로
+                                반영되지 않으며 검토 후
+                                반영됩니다.
                             </p>
 
                             <div className="knowledge-tabs">
@@ -458,9 +647,9 @@ export default function ReportDrawer({
                             </div>
 
                             <label className="knowledge-field">
-                <span>
-                  자료 제목
-                </span>
+                                <span>
+                                    자료 제목
+                                </span>
 
                                 <input
                                     value={
@@ -475,92 +664,107 @@ export default function ReportDrawer({
                                 />
                             </label>
 
+                            {/* 텍스트 */}
+
                             {supplementType ===
                                 'text' && (
-                                    <label className="knowledge-field">
-                  <span>
-                    이론 내용
-                  </span>
+                                <label className="knowledge-field">
+                                    <span>
+                                        이론 내용
+                                    </span>
 
-                                        <textarea
-                                            value={
-                                                supplementText
-                                            }
-                                            onChange={(e) =>
-                                                setSupplementText(
-                                                    e.target.value,
-                                                )
-                                            }
-                                            placeholder="보충할 이론이나 개념을 입력해주세요."
-                                        />
-                                    </label>
-                                )}
+                                    <textarea
+                                        value={
+                                            supplementText
+                                        }
+                                        onChange={(e) =>
+                                            setSupplementText(
+                                                e.target.value,
+                                            )
+                                        }
+                                        placeholder="보충할 이론이나 개념을 입력해주세요."
+                                    />
+                                </label>
+                            )}
+
+                            {/* 이미지 */}
 
                             {supplementType ===
                                 'image' && (
-                                    <label className="knowledge-file-box">
-                                        <strong>
-                                            이미지 선택
-                                        </strong>
+                                <label className="knowledge-file-box">
+                                    <strong>
+                                        이미지 선택
+                                    </strong>
 
-                                        <span>
-                    JPG, PNG
-                  </span>
+                                    <span>
+                                        JPG, PNG
+                                    </span>
 
-                                        <input
-                                            type="file"
-                                            accept="image/png,image/jpeg"
-                                            onChange={(e) =>
-                                                setSupplementFile(
-                                                    e.target.files?.[0] ??
-                                                    null,
-                                                )
+                                    <input
+                                        type="file"
+                                        accept="image/png,image/jpeg"
+                                        onChange={(e) =>
+                                            setSupplementFile(
+                                                e
+                                                    .target
+                                                    .files?.[0] ??
+                                                null,
+                                            )
+                                        }
+                                    />
+
+                                    {supplementFile && (
+                                        <small>
+                                            {
+                                                supplementFile.name
                                             }
-                                        />
+                                        </small>
+                                    )}
+                                </label>
+                            )}
 
-                                        {supplementFile && (
-                                            <small>
-                                                {
-                                                    supplementFile.name
-                                                }
-                                            </small>
-                                        )}
-                                    </label>
-                                )}
+                            {/* PDF */}
 
                             {supplementType ===
                                 'pdf' && (
-                                    <label className="knowledge-file-box">
-                                        <strong>
-                                            PDF 선택
-                                        </strong>
+                                <label className="knowledge-file-box">
+                                    <strong>
+                                        PDF 선택
+                                    </strong>
 
-                                        <span>
-                    PDF 자료를 선택해주세요.
-                  </span>
+                                    <span>
+                                        PDF 자료를
+                                        선택해주세요.
+                                    </span>
 
-                                        <input
-                                            type="file"
-                                            accept="application/pdf"
-                                            onChange={(e) =>
-                                                setSupplementFile(
-                                                    e.target.files?.[0] ??
-                                                    null,
-                                                )
+                                    <input
+                                        type="file"
+                                        accept="application/pdf"
+                                        onChange={(e) =>
+                                            setSupplementFile(
+                                                e
+                                                    .target
+                                                    .files?.[0] ??
+                                                null,
+                                            )
+                                        }
+                                    />
+
+                                    {supplementFile && (
+                                        <small>
+                                            {
+                                                supplementFile.name
                                             }
-                                        />
-
-                                        {supplementFile && (
-                                            <small>
-                                                {
-                                                    supplementFile.name
-                                                }
-                                            </small>
-                                        )}
-                                    </label>
-                                )}
+                                        </small>
+                                    )}
+                                </label>
+                            )}
                         </section>
                     )}
+
+                    {/* =========================
+                        오류
+                    ========================= */}
 
                     {submitError && (
                         <div className="notice error report-error">
@@ -569,12 +773,20 @@ export default function ReportDrawer({
                     )}
                 </div>
 
+                {/* =========================
+                    하단 버튼
+                ========================= */}
+
                 <div className="drawer-footer">
                     <button
                         type="button"
                         className="cancel-button"
-                        disabled={submitting}
-                        onClick={requestClose}
+                        disabled={
+                            submitting
+                        }
+                        onClick={
+                            requestClose
+                        }
                     >
                         취소
                     </button>
@@ -582,7 +794,9 @@ export default function ReportDrawer({
                     <button
                         type="button"
                         className="primary-button"
-                        disabled={submitting}
+                        disabled={
+                            submitting
+                        }
                         onClick={submit}
                     >
                         {submitting
