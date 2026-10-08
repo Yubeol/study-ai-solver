@@ -156,10 +156,11 @@ book 객체:
     "raw_text": "교재 원문 그대로", "vector_score": 0.64, "rerank_score": 0.97, "cited": true,
     "corpus": "common_json", "kind": "table", "block_id": "S2:TABLE:TAB_79_01", "title": "KDD와 CRISP-DM 비교",
     "title_path": ["제목", "소제목"], "document_title": "2과목 …",
-    "thumbnail_url": "https://…/thumbnails/…jpg 또는 null", "image_url": "https://…/crops/…jpg 또는 null"
+    "thumbnail_url": "https://…/thumbnails/…jpg 또는 null", "image_url": "https://…/crops/…jpg 또는 null",
+    "related_visuals": []
   }],
   "citations": ["evidence 중 cited=true인 것"],
-  "timings_ms": {"embed_ms": 100, "vector_ms": 400, "rerank_ms": 4000, "llm_ms": 1700, "total_ms": 6300},
+  "timings_ms": {"embed_ms": 100, "vector_ms": 400, "rerank_ms": 4000, "llm_ms": 1700, "visuals_ms": 20, "total_ms": 6300},
   "query_log_id": "uuid"
 }
 ```
@@ -167,17 +168,24 @@ book 객체:
 필드 메모:
 - **`evidence[].page`는 문자열**(`printed_page_number`, 예 `"217"`)입니다. 없으면 null. 프론트 타입은 `string | number | null`.
 - `answer`·`explanation`·`confusions` 안의 `[n]`은 `evidence[].n` 번호입니다. 범위 밖 번호는 서버가 지우고 `llm.citation_check`에 기록합니다.
-- `raw_text`는 교재 원문 그대로(교정 없음), 항상 문자열입니다. 표·시각자료 블록은 원문이 글자 목록이라 줄바꿈으로 이어서 줍니다. LLM에는 정리된 본문(이론은 `clean_text`, 표는 행 텍스트, 시각자료는 설명·구조·그림 속 글자)을 넘기지만 응답에서는 뺍니다.
+- `raw_text`는 교재 원문 그대로(교정 없음), 항상 문자열입니다. 표·시각자료 블록은 원문이 글자 목록이라 줄바꿈으로 이어서 줍니다. 원문이 없는 코드 블록은 `clean_code`, 수식 블록은 `plain_text`를 줍니다(D-M-034). LLM에는 정리된 본문(이론은 `clean_text`, 표는 행 텍스트, 시각자료는 설명·구조·그림 속 글자)을 넘기지만 응답에서는 뺍니다.
 - **`evidence[].chunk_id`는 `corpus`에 따라 가리키는 테이블이 다릅니다**: `corpus`가 `team_text`면 `theory_chunks.id`, `common_json`이면 `mingyu_app.blocks.id`. 두 경우 모두 UUID 문자열입니다.
 - 검색 대상 전환(D-M-033)으로 **추가된 필드**(기존 필드는 그대로):
   | 필드 | 뜻 |
   |---|---|
   | `corpus` | `team_text` / `common_json` (이 근거가 나온 곳) |
-  | `kind` | `theory` / `table` / `visual` (`team_text`는 항상 `theory`) |
+  | `kind` | `theory` / `table` / `visual` / `code` / `formula` (`team_text`는 항상 `theory`, 코드·수식은 3과목 블록, D-M-034) |
   | `block_id` | 공통 JSON 블록 ID(예 `S2:TABLE:TAB_79_01`), `team_text`면 null |
   | `title`, `title_path` | 근거 제목, 제목 경로 목록(`path`는 이것을 ` > `로 이은 문자열) |
   | `document_title` | 공통 JSON 문서 제목(`team_text`면 책 제목) |
   | `thumbnail_url`, `image_url` | 표·시각자료 블록의 썸네일·원본 crop URL. 서버 설정 `ASSET_URL_TEMPLATE`이 비어 있거나 이론이면 null |
+- **`evidence[].related_visuals`**(D-JW-008, 추가 필드): 근거가 공통 JSON **이론** 블록일 때 `block_relations`로 연결된 그림·표 목록. 없으면 `[]`(team_text·표·그림 근거도 `[]`).
+  ```json
+  [{"block_id": "S2:VISUAL:VIS_78_01", "kind": "visual", "title": "…", "thumbnail_url": "https://…", "image_url": "https://…"}]
+  ```
+  - 관계 신뢰도 `RELATED_VISUAL_MIN_CONFIDENCE`(0.7) 이상, 근거당 최대 `RELATED_VISUAL_MAX`(3)개, 신뢰도 높은 순. 이미 `evidence`에 있는 블록은 빼고, 이미지 주소를 만들 수 없으면(키 없음·`ASSET_URL_TEMPLATE` 비어 있음) 뺀다.
+  - `thumbnail_url`이 없으면 `image_url`로, 반대도 같게 채운다. S3 공개 주소라 `<img src>`로 바로 띄운다.
+  - LLM 입력에는 넣지 않는다(화면 표시용). `query_logs.metadata.evidence[].related_visual_ids`에 block_id만 남는다. 조회가 실패해도 답변은 그대로(`[]`).
 - 응답 최상위 `corpus`: 이 요청에 쓴 검색 대상(`SEARCH_CORPUS`). `candidate_sources`: 리랭크 전 벡터 후보 N개가 어느 쪽에서 왔는지 개수(개발 확인용).
 - `status`:
   | 값 | 뜻 | `answer` |

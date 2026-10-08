@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     search_corpus: Literal["team_text", "common_json", "mixed"] = "mixed"
     # 블록 이미지 URL 틀. {key}에 thumbnail_s3_key / crop_s3_key가 들어간다. 비우면 URL을 만들지 않음(null)
     asset_url_template: str = ""
+    # 이론 근거에 붙일 연결 그림·표(D-JW-008): block_relations 신뢰도 하한, 근거당 최대 개수(0이면 끔)
+    related_visual_min_confidence: float = Field(default=0.7, ge=0, le=1)
+    related_visual_max: int = Field(default=3, ge=0, le=10)
 
     # 리랭커 (ARCHITECTURE "검색 단계 상세"). 모델 이름이 비면 리랭크 없이 벡터 순위 그대로. 캐시는 EMBEDDING_MODEL_DIR
     reranker_model: str = ""

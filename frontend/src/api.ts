@@ -12,13 +12,11 @@ export type Evidence = {
   rerank_score: number | null
   cited: boolean
 
-  kind?:
-    | 'theory'
-    | 'table'
-    | 'visual'
-    | string
-    | null
-
+  /*
+   * #10 이후 근거 메타데이터
+   * 기존 응답과의 호환을 위해 optional 처리
+   */
+  kind?: 'theory' | 'table' | 'visual' | 'code' | 'formula' | string | null
   corpus?: string | null
 
   block_id?: string | null

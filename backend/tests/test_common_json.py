@@ -53,6 +53,25 @@ def _visual(sid, page, **kw):
     return b
 
 
+def _code(sid, page, **kw):
+    b = {"block_id": f"S9:CODE:{sid}", "source_id": sid, "subject": 9, "printed_page_number": page,
+         "block_type": "code", "title_path": ["1장 가짜 장", "가짜 코드"], "title": "가짜 코드",
+         "raw_code": "> x <- 1\n> x\n[1] 1", "clean_code": "x <- 1\nx\n", "execution_output": "[1] 1",
+         "language": "R", "raw_text": None, "clean_text": None, "image": dict(IMAGE),
+         "review": {"needs_review": False}}
+    b.update(kw)
+    return b
+
+
+def _formula(sid, page, **kw):
+    b = {"block_id": f"S9:FORMULA:{sid}", "source_id": sid, "subject": 9, "printed_page_number": page,
+         "block_type": "formula", "title_path": ["1장 가짜 장", "가짜 수식"], "title": "가짜 수식",
+         "raw_text": r"\frac{a}{b}", "clean_text": r"\frac{a}{b}", "latex": r"\frac{a}{b}",
+         "plain_text": "a / b", "image": None, "review": {"needs_review": False}}
+    b.update(kw)
+    return b
+
+
 def _rel(rid, a, b, link_type, source="verified_relationship_manifest"):
     return {"relationship_id": rid, "from_block_id": a, "to_block_id": b, "from_page": 1, "to_page": 2,
             "link_type": link_type, "relation_types": ["SEMANTIC_CONTINUATION"], "confidence": 0.9,
@@ -282,7 +301,7 @@ def test_bad_duplicate_target(settings, sample):
 @pytest.mark.parametrize(
     "index, change, expected",
     [
-        (1, {"block_type": "formula"}, "적재 규칙이 없는 block_type"),
+        (1, {"block_type": "chart"}, "적재 규칙이 없는 block_type"),
         (1, {"title_path": ["한 단계"]}, "title_path"),
         (1, {"clean_text": ""}, "clean_text"),
         (1, {"block_role": "summary"}, "block_role"),
@@ -437,3 +456,102 @@ def test_cli_block_id_of_other_subject(settings, sample, tmp_path, capsys):
 def test_cli_rejects_bad_option_combinations(argv):
     with pytest.raises(SystemExit):
         main(["--subject", "subject9", *argv])
+
+
+# ----- 코드·수식, 이미지 키, 원문 해시 (D-M-034) -----
+
+def _with(sample, *blocks):
+    s = copy.deepcopy(sample)
+    s["blocks"]["blocks"] += list(blocks)
+    return s
+
+
+def test_code_text_fixed_output():
+    assert embedding_text(_code("CODE_2_01", 2)) == (
+        "1장 가짜 장 > 가짜 코드\n[코드] 가짜 코드\nx <- 1\nx\n실행 결과:\n[1] 1")
+    assert embedding_text(_code("CODE_2_01", 2), with_path=False) == "[코드] 가짜 코드\nx <- 1\nx\n실행 결과:\n[1] 1"
+    # 실행 결과 없음 / 코드 없음(실행 결과만)
+    assert embedding_text(_code("CODE_2_02", 2, execution_output="")) == (
+        "1장 가짜 장 > 가짜 코드\n[코드] 가짜 코드\nx <- 1\nx")
+    assert embedding_text(_code("CODE_2_03", 2, clean_code="")) == (
+        "1장 가짜 장 > 가짜 코드\n[코드] 가짜 코드\n실행 결과:\n[1] 1")
+
+
+def test_formula_text_fixed_output():
+    assert embedding_text(_formula("FORM_2_01", 2)) == "1장 가짜 장 > 가짜 수식\n[수식] 가짜 수식\na / b"
+    # plain_text가 없으면 latex 그대로
+    assert embedding_text(_formula("FORM_2_02", 2, plain_text=None), with_path=False) == (
+        "[수식] 가짜 수식\n" + r"\frac{a}{b}")
+
+
+def test_code_formula_build_and_rebuild_from_row(settings, sample):
+    from dataclasses import asdict
+
+    from app.ingestion.common_json import block_display_text, block_from_row
+
+    s = _with(sample, _code("CODE_2_01", 2), _code("CODE_2_02", 2, clean_code="", raw_code=""),
+              _formula("FORM_2_01", 2))
+    s["relations"]["block_relations"].append(
+        _rel("BREL_9", "S9:THEORY:TH_1_01", "S9:CODE:CODE_2_01", "THEORY_TO_CODE"))
+    data = _build(settings, s)
+    b = _by_id(data)
+    assert len(data.relations) == 4
+    assert b["S9:CODE:CODE_2_01"].search_enabled and b["S9:FORMULA:FORM_2_01"].search_enabled
+    assert b["S9:CODE:CODE_2_01"].block_role == "content"
+    assert b["S9:CODE:CODE_2_01"].source["clean_code"] == "x <- 1\nx\n"  # 원본 필드는 source 칸에
+    assert b["S9:FORMULA:FORM_2_01"].image is None and b["S9:FORMULA:FORM_2_01"].crop_s3_key is None
+    for rec in data.blocks:  # DB 행(source 포함)만으로 같은 텍스트
+        assert embedding_text(block_from_row(asdict(rec))) == rec.embedding_text
+    # 근거 표시: raw_text가 비면 코드는 clean_code, 수식은 plain_text
+    assert block_display_text(asdict(b["S9:CODE:CODE_2_01"])) == "x <- 1\nx\n"
+    assert block_display_text(asdict(b["S9:FORMULA:FORM_2_01"])) == r"\frac{a}{b}"  # 원문이 있으면 원문
+    assert block_display_text({"block_type": "formula", "raw_text": None, "source": {"plain_text": "a / b"}}) == "a / b"
+    assert block_display_text(asdict(b["S9:TABLE:TAB_2_01"])) == "원문 목록"
+
+
+def test_code_formula_required_fields(settings, sample):
+    errors = _errors(settings, _with(sample, _code("CODE_2_01", 2, clean_code="", execution_output=" "),
+                                     _formula("FORM_2_01", 2, plain_text="", latex=None),
+                                     _code("CODE_2_02", 2, image=None)))
+    assert any("CODE_2_01" in e and "clean_code" in e for e in errors)
+    assert any("FORM_2_01" in e and "plain_text" in e for e in errors)
+    assert any("CODE_2_02" in e and "image" in e for e in errors)
+
+
+def test_crop_key_falls_back_between_names(settings, sample):
+    s = copy.deepcopy(sample)
+    s["blocks"]["blocks"][3]["image"] = {"s3_bucket": "b", "s3_region": "r", "crop_s3_key": "k/c2.jpg",
+                                         "thumbnail_s3_key": "k/t.jpg"}
+    s["blocks"]["blocks"][4]["image"] = dict(IMAGE, crop_s3_key="k/c3.jpg")
+    b = _by_id(_build(settings, s))
+    assert b["S9:TABLE:TAB_2_01"].crop_s3_key == "k/c2.jpg"  # crop_s3_key 이름
+    assert b["S9:TABLE:TAB_2_02"].crop_s3_key == "k/c3.jpg"  # 둘 다 있으면 crop_s3_key 우선
+    assert b["S9:VISUAL:VIS_2_01"].crop_s3_key == "k/crop.jpg"  # original_s3_key만(1~3과목 파일)
+    s["blocks"]["blocks"][3]["image"] = {"s3_bucket": "b", "s3_region": "r", "thumbnail_s3_key": "k/t.jpg"}
+    assert any("TAB_2_01" in e and "image" in e for e in _errors(settings, s))
+
+
+def test_table_dict_rows_and_col_index_merged_cells(settings, sample):
+    """3과목 표 형태: rows가 {머리: 값} 목록 / merged_cells가 col_index. 저장은 원본 그대로."""
+    dict_rows = {"headers": [], "row_headers": [], "merged_cells": [], "units": [],
+                 "rows": [{"구분": "장점", "설명": "가"}, {"구분": "단점", "설명": "나"}]}
+    assert linearize_table(dict_rows) == "- 구분: 장점 | 설명: 가\n- 구분: 단점 | 설명: 나"
+    col_index = {"headers": ["구분", "값"], "rows": [["갑", "1"], ["", "2"]],
+                 "merged_cells": [{"start_row": 0, "end_row": 1, "col_index": 0, "text": "갑"}]}
+    assert linearize_table(col_index) == "- 구분: 갑 | 값: 1\n- 구분: 갑 | 값: 2"
+    s = copy.deepcopy(sample)
+    s["blocks"]["blocks"][3]["table"] = dict_rows
+    s["blocks"]["blocks"][4]["table"] = col_index
+    b = _by_id(_build(settings, s))
+    assert b["S9:TABLE:TAB_2_01"].table_data == dict_rows
+    assert b["S9:TABLE:TAB_2_02"].embedding_text.endswith("- 구분: 갑 | 값: 1\n- 구분: 갑 | 값: 2")
+
+
+def test_source_clean_text_hash_filled(settings, sample):
+    from app.core.text_hash import clean_text_hash
+
+    b = _by_id(_build(settings, _with(sample, _code("CODE_2_01", 2), _formula("FORM_2_01", 2))))
+    assert b["S9:THEORY:TH_1_01"].source_clean_text_hash == clean_text_hash("가나다 설명 문장이다.")
+    assert b["S9:FORMULA:FORM_2_01"].source_clean_text_hash == clean_text_hash(r"\frac{a}{b}")
+    assert b["S9:TABLE:TAB_2_01"].source_clean_text_hash is None  # clean_text 없음(005 백필과 같은 규칙)
+    assert b["S9:CODE:CODE_2_01"].source_clean_text_hash is None

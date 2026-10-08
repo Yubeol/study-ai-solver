@@ -10,6 +10,8 @@
   - 이론: 제목 경로 + clean_text
   - 표: 제목 경로 + [표] 제목 + 행마다 한 줄(table.rows, 병합 셀 빈칸 채움). raw_text는 쓰지 않는다
   - 시각자료: 제목 경로 + [그림] 제목 + 설명 + 구조 + 그림 속 글자(raw_text). related_theory_context는 빼고
+  - 코드: 제목 경로 + [코드] 제목 + clean_code + (있으면) "실행 결과:" + execution_output (D-M-034)
+  - 수식: 제목 경로 + [수식] 제목 + plain_text(없으면 latex). LaTeX 문자열도 그대로 쓴다 (D-M-034)
   - model_generated(keywords, exam_clues, confusable_concepts)는 저장만 하고 넣지 않는다
 """
 
@@ -20,15 +22,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core.config import Settings
+from app.core.text_hash import clean_text_hash
 
-BLOCK_TYPES = ("theory", "table", "visual")  # formula·code는 DB CHECK에는 있지만 적재 규칙이 아직 없어 오류로 멈춘다
+BLOCK_TYPES = ("theory", "table", "visual", "code", "formula")
 BLOCK_ROLES = ("content", "learning_objective")
 CORPUS = "common_json"  # documents.corpus 값(검색 대상 SEARCH_CORPUS의 common_json과 같은 이름)
 BLOCKS_FORMAT = "adsp_common_json"
 RELATIONS_FORMAT = "adsp_common_relations"
 EXCLUDE_DUPLICATE = "duplicate_of_table"
 EXCLUDE_LEARNING_OBJECTIVE = "learning_objective"
-IMAGE_KEYS = ("s3_bucket", "s3_region", "original_s3_key", "thumbnail_s3_key")
+IMAGE_KEYS = ("s3_bucket", "s3_region", "thumbnail_s3_key")  # + 크롭 키(CROP_KEYS 중 하나)
+CROP_KEYS = ("crop_s3_key", "original_s3_key")  # 같은 뜻(데이터 담당 확인), 앞 이름이 있으면 우선 (D-M-034)
+CODE_FIELDS = ("clean_code", "execution_output")  # source 칸에 남는 원본 필드 중 임베딩·표시에 쓰는 것
+FORMULA_FIELDS = ("plain_text", "latex")
 TITLE_PATH_SEP = " > "
 _BLOCK_ID = re.compile(r"^S(\d+):([A-Z]+):(.+)$")
 _SUBJECT_DIR = re.compile(r"^subject(\d+)$")
@@ -83,6 +89,7 @@ class BlockRecord:
     embedding_text: str
     embedding_text_hash: str
     content_hash: str
+    source_clean_text_hash: str | None = None  # JSON clean_text 해시(005, 이론 수정 기준). clean_text 없으면 None
 
 
 @dataclass
@@ -304,21 +311,55 @@ def _check_block(b: dict, n: int, types: dict[str, str]) -> list[str]:
             target = resolve_duplicate(dup, n)
             if types.get(target) != "table":
                 errs.append(f"{bid}: duplicate_of_table_id {dup!r} → {target} 표 블록 없음")
-    else:
+    elif btype != "formula" or b.get("image") is not None:  # 수식은 이미지가 없을 수 있다
         image = b.get("image")
-        if not isinstance(image, dict) or not all(_is_str(image.get(k)) for k in IMAGE_KEYS):
-            errs.append(f"{bid}: image에 {', '.join(IMAGE_KEYS)} 필요")
+        if not isinstance(image, dict) or not all(_is_str(image.get(k)) for k in IMAGE_KEYS) or not crop_key(image):
+            errs.append(f"{bid}: image에 {', '.join(IMAGE_KEYS)}, {' 또는 '.join(CROP_KEYS)} 필요")
     if btype == "table":
         errs += _check_table(bid, b.get("table"))
     if btype == "visual":
         if not (_is_str(b.get("visual_description")) or _is_str(b.get("visual_structure")) or _raw_words(b.get("raw_text"))):
             errs.append(f"{bid}: 시각자료 설명·구조·그림 속 글자가 모두 비어 있음")
+    if btype == "code" and not any(_is_str(b.get(k)) for k in CODE_FIELDS):
+        errs.append(f"{bid}: 코드 clean_code·execution_output가 모두 비어 있음")
+    if btype == "formula" and not any(_is_str(b.get(k)) for k in FORMULA_FIELDS):
+        errs.append(f"{bid}: 수식 plain_text·latex가 모두 비어 있음")
     return errs
+
+
+def crop_key(image: dict | None) -> str | None:
+    """크롭 이미지 저장소 키. crop_s3_key가 없으면 original_s3_key(같은 뜻의 다른 이름)."""
+    image = image or {}
+    return next((image[k] for k in CROP_KEYS if _is_str(image.get(k))), None)
+
+
+def normalize_table(t: dict) -> dict:
+    """표 형태 차이를 기존 형태(rows = 칸 목록, merged_cells = start/end_col)로 맞춘 복사본 (D-M-034).
+
+    - rows가 {머리: 값} 객체 목록이면: 머리(처음 나온 순서)를 headers로(원래 headers가 있으면 그대로), 값은 그 순서의 칸
+    - merged_cells에 col_index만 있으면 start_col = end_col = col_index
+    기존 형태(1·2과목)는 내용이 바뀌지 않는다. 저장(table_data)은 원본 그대로 하고 검증·임베딩 때만 쓴다.
+    """
+    t = dict(t)
+    rows = t.get("rows")
+    if isinstance(rows, list) and rows and all(isinstance(r, dict) for r in rows):
+        keys = list(dict.fromkeys(k for r in rows for k in r))
+        t["headers"] = t.get("headers") or keys
+        t["rows"] = [[r.get(k, "") for k in keys] for r in rows]
+    merged = t.get("merged_cells")
+    if isinstance(merged, list):
+        t["merged_cells"] = [
+            {**m, "start_col": m["col_index"], "end_col": m["col_index"]}
+            if isinstance(m, dict) and "col_index" in m and "start_col" not in m and "end_col" not in m else m
+            for m in merged
+        ]
+    return t
 
 
 def _check_table(bid: str, t) -> list[str]:
     if not isinstance(t, dict):
         return [f"{bid}: table 없음"]
+    t = normalize_table(t)
     rows = t.get("rows")
     if not (isinstance(rows, list) and rows and all(isinstance(r, list) and r for r in rows)):
         return [f"{bid}: table.rows는 비지 않은 행 목록이어야 함"]
@@ -418,6 +459,7 @@ def _to_record(settings: Settings, b: dict, n: int) -> BlockRecord:
         reason = EXCLUDE_LEARNING_OBJECTIVE
 
     text = embedding_text(b)
+    clean = b.get("clean_text") if isinstance(b.get("clean_text"), str) else None
     return BlockRecord(
         block_id=b["block_id"],
         source_id=b.get("source_id") or _BLOCK_ID.match(b["block_id"]).group(3),
@@ -429,11 +471,11 @@ def _to_record(settings: Settings, b: dict, n: int) -> BlockRecord:
         title_path=list(b["title_path"]),
         concept_name=b.get("concept_name"),
         raw_text=b.get("raw_text"),
-        clean_text=b.get("clean_text") if isinstance(b.get("clean_text"), str) else None,
+        clean_text=clean,
         table_data=b.get("table") if btype == "table" else None,
         visual_data={k: b[k] for k in _VISUAL_FIELDS if k in b} if btype == "visual" else None,
         image=image,
-        crop_s3_key=(image or {}).get("original_s3_key"),
+        crop_s3_key=crop_key(image),
         thumbnail_s3_key=(image or {}).get("thumbnail_s3_key"),
         duplicate_of_block_id=dup,
         model_generated=b.get("model_generated") if isinstance(b.get("model_generated"), dict) else {},
@@ -446,6 +488,7 @@ def _to_record(settings: Settings, b: dict, n: int) -> BlockRecord:
         embedding_text=text,
         embedding_text_hash=sha256(text),
         content_hash=sha256(json.dumps(b, ensure_ascii=False, sort_keys=True)),
+        source_clean_text_hash=clean_text_hash(clean) if clean is not None else None,
     )
 
 
@@ -485,6 +528,7 @@ def linearize_table(table: dict) -> str:
     - 머리행이 없으면 첫 칸을 행 이름으로 "- 행이름: 값 / 값"(row_headers는 rows 첫 칸과 겹쳐 쓰지 않음)
     - units가 있으면 마지막에 "단위: …"
     """
+    table = normalize_table(table)
     headers = [one_line(h) for h in table.get("headers") or []]
     lines = []
     for row in fill_merged_cells(table):
@@ -514,6 +558,16 @@ def embedding_text(b: dict, *, with_path: bool = True) -> str:
     head = f"{path}\n" if with_path else ""
     if btype == "table":
         return f"{head}[표] {one_line(b['title'])}\n{linearize_table(b['table'])}"
+    if btype == "code":
+        parts = [f"{head}[코드] {one_line(b['title'])}"]
+        if _is_str(b.get("clean_code")):
+            parts.append(b["clean_code"].strip())
+        if _is_str(b.get("execution_output")):
+            parts.append(f"실행 결과:\n{b['execution_output'].strip()}")
+        return "\n".join(parts)
+    if btype == "formula":
+        body = next(b[k].strip() for k in FORMULA_FIELDS if _is_str(b.get(k)))
+        return f"{head}[수식] {one_line(b['title'])}\n{body}"
     parts = [f"{head}[그림] {one_line(b['title'])}"]
     if _is_str(b.get("visual_description")):
         parts.append(f"설명: {b['visual_description'].strip()}")
@@ -532,9 +586,22 @@ def raw_text_display(raw) -> str:
     return "" if raw is None else str(raw)
 
 
+def block_display_text(row: dict) -> str:
+    """블록 DB 행 → 근거 원문 표시 문자열. raw_text가 비면 코드는 clean_code, 수식은 plain_text(source 칸)."""
+    text = raw_text_display(row.get("raw_text"))
+    if text.strip():
+        return text
+    field_name = {"code": "clean_code", "formula": "plain_text"}.get(row.get("block_type"))
+    value = (row.get("source") or {}).get(field_name) if field_name else None
+    return value if isinstance(value, str) else text
+
+
 def block_from_row(row: dict) -> dict:
-    """blocks 테이블 행 → embedding_text 입력(원본 블록과 같은 키). 표는 table_data, 그림 필드는 visual_data에 있다."""
+    """blocks 테이블 행 → embedding_text 입력(원본 블록과 같은 키). 표는 table_data, 그림 필드는 visual_data,
+    코드·수식 필드(clean_code·execution_output·plain_text·latex)는 source에 있다."""
+    source = row.get("source") or {}
     return {
+        **{k: source[k] for k in CODE_FIELDS + FORMULA_FIELDS if k in source},
         "block_type": row["block_type"],
         "title": row["title"],
         "title_path": row["title_path"],

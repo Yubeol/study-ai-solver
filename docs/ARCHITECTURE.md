@@ -129,12 +129,15 @@ adsp-study-rag/
   - 반입 결과: 3권 324페이지 EXTRACTED, run PARTIAL. 리포트 `data/reports/team_import/apply_{key}.json`
 - PaddleOCR 경로는 새로 업로드하는 캡처용으로 유지한다(우선순위만 뒤로).
 
-### 공통 JSON 적재 (구현 2026-10-07, D-M-032 — /qa 검색 대상 연결은 아래 "검색 대상 전환", D-M-033)
+### 공통 JSON 적재 (구현 2026-10-07, D-M-032 — /qa 검색 대상 연결은 아래 "검색 대상 전환", D-M-033. 3과목·코드·수식은 2026-10-08 D-M-034)
+- 적재 현황(2026-10-08): 1과목 163 · 2과목 227 · 3과목 719 = blocks 1109(검색 대상 1018), 관계 62 · 108 · 240.
 데이터 담당의 공통 JSON(`COMMON_JSON_DIR/subject{n}/`의 `*_blocks.json`·`*_relations.json`·manifest·validation_report)을 팀 텍스트 데이터(theory_chunks)와 **따로** mingyu_app에 넣는다. 33문항·기출로 비교한 뒤 교체 여부를 정한다.
 - 테이블(004): `documents`(문서 1행 = 과목 1개, `document_key` = `{format}:subject{n}`, corpus `common_json`, 같은 교재의 기존 book_id) → `blocks`(블록 1행 = 검색 단위 1개, `block_id` 전체 고유) → `block_relations`((from, to) 고유, relation_source·relation_types 보존). 문서를 지우면 블록·관계가 CASCADE로 지워진다. 검색 대상 뷰 `v_searchable_blocks`(search_enabled + 임베딩 있음 + needs_review=false), HNSW는 `WHERE search_enabled AND embedding IS NOT NULL`.
 - 읽기: 버전 문자열로 분기하지 않고 필드가 있으면 쓴다. 컬럼에 없는 원본 필드는 `blocks.source`, 원문은 `raw_text`(JSONB, 원본 형태 그대로). 표·시각자료의 빈 block_role은 content. 중복 이론은 블록의 `duplicate_of_table_id`(source_id → `S{n}:TABLE:…`)로 판단.
 - 검색 제외(행은 저장): 표 중복 이론(`duplicate_of_table`), 학습목표(`learning_objective`). 설정 `COMMON_JSON_SEARCH_*`로 다시 넣을 수 있다.
-- 임베딩 텍스트: 이론 = 제목 경로 + clean_text / 표 = 제목 경로 + `[표] 제목` + 행마다 한 줄(rows, 병합 셀 빈칸 채움, units) / 시각자료 = 제목 경로 + `[그림] 제목` + 설명 + 구조 + 그림 속 글자. related_theory_context·model_generated는 넣지 않는다.
+- 임베딩 텍스트: 이론 = 제목 경로 + clean_text / 표 = 제목 경로 + `[표] 제목` + 행마다 한 줄(rows, 병합 셀 빈칸 채움, units) / 시각자료 = 제목 경로 + `[그림] 제목` + 설명 + 구조 + 그림 속 글자 / 코드 = 제목 경로 + `[코드] 제목` + clean_code + (있으면) `실행 결과:` + execution_output / 수식 = 제목 경로 + `[수식] 제목` + plain_text(없으면 latex, LaTeX 그대로). related_theory_context·model_generated는 넣지 않는다(D-M-034).
+- 3과목 형식 차이(D-M-034): 이미지 크롭 키는 `image.crop_s3_key`, 없으면 `image.original_s3_key`(같은 뜻) → `blocks.crop_s3_key`. 수식은 이미지가 없어도 된다. 코드·수식 전용 필드(clean_code·execution_output·plain_text·latex 등)는 컬럼 없이 `blocks.source`에 두고 `block_from_row`가 읽는다. 표 rows가 `{머리: 값}` 목록이거나 merged_cells가 `col_index`면 검증·임베딩 때만 기존 형태로 맞춘다(`normalize_table`, table_data는 원본 그대로). 근거 원문 표시는 raw_text가 비면 코드 clean_code, 수식 plain_text(`block_display_text`).
+- 원문 해시: 적재 upsert가 `source_clean_text_hash = clean_text_hash(clean_text)`를 채운다(clean_text 없으면 NULL, 005 백필과 같은 규칙). 바뀌지 않은 블록은 upsert하지 않으므로 기존 값 그대로.
 - 실행: `cd backend; uv run python -m app.ingestion.common_json_load --subject all --no-db`(파일 검증·텍스트만) → `--subject all`(DB와 비교, 읽기만) → `--apply --subject all`. 수정본은 같은 명령을 다시 돌리면 바뀐 블록만 다시 임베딩되고, `--block-id`로 블록을 지정할 수도 있다. `--prune`(파일에서 빠진 블록 삭제), `--delete`(문서째 삭제), `--show <block_id>`(임베딩 텍스트 출력).
 - 흐름: 파일 전체 검증(하나라도 실패하면 중단) → 블록 변환·임베딩 텍스트 → DB와 해시 비교(new/changed/unchanged) → 바뀐 검색 대상만 임베딩(DB 쓰기 전) → 과목당 트랜잭션 1개(documents upsert → blocks upsert → block_relations 전체 동기화 → prune) → processing_runs 1건(metadata.common_json) → 리포트 `data/reports/common_json/{시각}_{mode}.json`(블록별 상태·임베딩 텍스트).
 
@@ -227,7 +230,7 @@ adsp-study-rag/
 
 #### 검색 대상 전환 (구현 2026-10-07, D-M-033)
 - 설정 `SEARCH_CORPUS`: `team_text`(`v_searchable_theory`) / `common_json`(`mingyu_app.v_searchable_blocks`) / `mixed`(기본, 2026-10-07 D-M-033). 진입점은 `search.search_candidates`(질의 흐름·평가·확인용 CLI가 같이 씀).
-- **mixed 규칙**: `mingyu_app.documents`에 `corpus='common_json'`으로 연결된 book(`documents.book_id`)은 블록에서, 나머지 book은 이론 청크에서(그 book 제외) 각각 후보 N개 → 두 쪽 모두 bge-m3 정규화 벡터라 cosine 점수로 합쳐 상위 N개 → 리랭커. 과목 목록은 설정에 없어서, **3과목 공통 JSON을 적재하면 mixed의 3과목 검색 대상이 자동으로 블록으로 바뀐다**. 후보 출처 개수는 `candidate_sources`로 남긴다.
+- **mixed 규칙**: `mingyu_app.documents`에 `corpus='common_json'`으로 연결된 book(`documents.book_id`)은 블록에서, 나머지 book은 이론 청크에서(그 book 제외) 각각 후보 N개 → 두 쪽 모두 bge-m3 정규화 벡터라 cosine 점수로 합쳐 상위 N개 → 리랭커. 과목 목록은 설정에 없어서, 공통 JSON을 적재한 과목은 자동으로 블록 검색으로 바뀐다(2026-10-08 3과목 적재로 **지금은 1~3과목 모두 블록**, theory_chunks는 mixed에서 쓰이지 않음, D-M-034). 후보 출처 개수는 `candidate_sources`로 남긴다.
 - 블록 행은 이론 청크와 같은 모양으로 맞춘다(`search.block_row`): `kind`(theory/table/visual), `corpus`, `block_id`, `title_path`·`path`, `printed_page_number`(문자열), `raw_text`(표·그림 원문 목록은 줄바꿈으로 이은 문자열), `book_id`·`book_title`(연결된 book), 이미지 URL(`ASSET_URL_TEMPLATE` + 저장소 키).
 - 블록의 LLM·판정기용 본문(`clean_text` 자리) = `common_json.embedding_text(블록, with_path=False)`: 적재 때 임베딩 텍스트를 만든 함수와 같은 함수로, 제목 경로만 뺀다(이론은 clean_text, 표는 `[표] 제목` + 행, 그림은 `[그림] 제목` + 설명·구조·그림 속 글자). DB 컬럼만으로 다시 만들며(`block_from_row`), 저장된 390블록 전부가 적재 때 값과 같음을 로컬 DB 테스트로 확인한다. 리랭커 입력은 저장된 `embedding_text` 그대로.
 - 인용 검증([n])은 근거 번호만 보므로 블록에도 그대로 동작한다.
