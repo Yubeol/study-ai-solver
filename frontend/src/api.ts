@@ -1,50 +1,104 @@
 // 백엔드 API 호출.
 // Vite 개발 서버 프록시가 백엔드로 넘긴다.
 
+/* =========================
+   근거 / 이미지
+========================= */
+
+export type RelatedVisual = {
+  block_id: string
+
+  kind:
+    | 'visual'
+    | 'table'
+    | string
+
+  title: string | null
+
+  thumbnail_url: string | null
+
+  image_url: string | null
+}
+
 export type Evidence = {
   n: number
+
   chunk_id: string
+
   book_title: string
+
   page: string | number | null
+
   path: string
+
   raw_text: string
+
   vector_score: number | null
+
   rerank_score: number | null
+
   cited: boolean
 
-  /*
-   * #10 이후 근거 메타데이터
-   * 기존 응답과의 호환을 위해 optional 처리
-   */
-  kind?: 'theory' | 'table' | 'visual' | 'code' | 'formula' | string | null
+  kind?:
+    | 'theory'
+    | 'table'
+    | 'visual'
+    | string
+    | null
+
   corpus?: string | null
 
   block_id?: string | null
+
+  thumbnail_url?: string | null
+
+  image_url?: string | null
+
+  related_visuals?: RelatedVisual[]
 }
+
+/* =========================
+   QA 응답
+========================= */
 
 export type JudgeInfo = {
   provider: string
+
   model: string | null
+
   probability: number | null
+
   can_answer: boolean | null
+
   confident: boolean
 
   thresholds: {
     can_answer_min: number
+
     confident_min: number
   }
 
   latency_ms: number
+
   attempts: number
+
   error: string | null
 }
 
 export type McqCheck = {
   is_mcq: boolean
+
   negative: boolean
+
   chosen: number
-  option_verdicts: Record<string, string>
+
+  option_verdicts: Record<
+    string,
+    string
+  >
+
   consistent: boolean
+
   reasons: string[]
 }
 
@@ -71,24 +125,32 @@ export type QaResponse = {
 
   scores: {
     vector_top: number | null
+
     rerank_top: number | null
   }
 
   judge: JudgeInfo | null
 
   answer: string
+
   explanation: string
+
   confusions: string
 
   low_confidence: boolean
+
   low_confidence_reasons: string[]
 
   mcq_check: McqCheck | null
 
   evidence: Evidence[]
+
   citations: Evidence[]
 
-  timings_ms: Record<string, number>
+  timings_ms: Record<
+    string,
+    number
+  >
 
   query_log_id: string | null
 
@@ -121,7 +183,7 @@ export type CreateAnswerReportRequest = {
 
   /*
    * wrong_concept일 때만 선택값이 들어가고
-   * 그 외 신고 유형은 [] 전송
+   * 다른 신고 유형에서는 []를 보낸다.
    */
   concept_details: ConceptDetail[]
 
@@ -168,9 +230,13 @@ export type SupplementInput = {
 
 export type BlockDetail = {
   block_id: string
+
   kind: string
+
   title: string | null
+
   title_path: string | null
+
   clean_text: string
 }
 
@@ -256,12 +322,14 @@ export class ApiError extends Error {}
 
 const QA_TIMEOUT_SECONDS =
   Number(
-    import.meta.env.VITE_QA_TIMEOUT_SECONDS,
+    import.meta.env
+      .VITE_QA_TIMEOUT_SECONDS,
   ) || 60
 
 const OCR_TIMEOUT_SECONDS =
   Number(
-    import.meta.env.VITE_OCR_TIMEOUT_SECONDS,
+    import.meta.env
+      .VITE_OCR_TIMEOUT_SECONDS,
   ) || 330
 
 const CONNECTION_ERROR =
@@ -281,50 +349,66 @@ async function request<T>(
   const timer =
     timeoutSeconds
       ? setTimeout(
-          () => controller.abort(),
-          timeoutSeconds * 1000,
+          () =>
+            controller.abort(),
+          timeoutSeconds *
+            1000,
         )
       : undefined
 
   let res: Response
 
   try {
-    res = await fetch(path, {
-      ...init,
-      signal: controller.signal,
-    })
-  } catch (e) {
+    res = await fetch(
+      path,
+      {
+        ...init,
+        signal:
+          controller.signal,
+      },
+    )
+  } catch (error) {
     throw new ApiError(
       controller.signal.aborted
         ? TIMEOUT_ERROR
         : CONNECTION_ERROR,
       {
-        cause: e,
+        cause: error,
       },
     )
   } finally {
-    clearTimeout(timer)
+    clearTimeout(
+      timer,
+    )
   }
 
   const body =
     await res.text()
 
-  let data: unknown = null
+  let data: unknown =
+    null
 
-  let jsonParsed = false
+  let jsonParsed =
+    false
 
   if (body) {
     try {
       data =
-        JSON.parse(body)
+        JSON.parse(
+          body,
+        )
 
       jsonParsed =
         true
     } catch {
-      data = null
+      data =
+        null
     }
   }
 
+  /*
+   * HTTP 오류 응답
+   */
   if (!res.ok) {
     if (
       data === null &&
@@ -342,18 +426,19 @@ async function request<T>(
     )?.detail
 
     throw new ApiError(
-      typeof detail === 'string'
+      typeof detail ===
+        'string'
         ? detail
         : `요청 실패(HTTP ${res.status})`,
     )
   }
 
   /*
-   * HTTP 200인데 JSON이 아닌 응답이면
-   * 정상 API 응답으로 처리하지 않는다.
+   * API가 성공 응답(200)을 줬는데
+   * JSON이 아닌 HTML 등이 돌아온 경우.
    *
    * Vite proxy 누락으로 index.html이
-   * 반환되는 경우도 여기서 잡힌다.
+   * 반환되는 경우도 여기서 잡는다.
    */
   if (
     body &&
@@ -391,9 +476,10 @@ export function ask(
           'application/json',
       },
 
-      body: JSON.stringify({
-        question,
-      }),
+      body:
+        JSON.stringify({
+          question,
+        }),
     },
     QA_TIMEOUT_SECONDS,
   )
@@ -417,9 +503,10 @@ export function createAnswerReport(
           'application/json',
       },
 
-      body: JSON.stringify(
-        payload,
-      ),
+      body:
+        JSON.stringify(
+          payload,
+        ),
     },
   )
 }
@@ -440,8 +527,10 @@ export function createSupplement(
   )
 
   if (
-    input.reportId !== undefined &&
-    input.reportId !== null
+    input.reportId !==
+      undefined &&
+    input.reportId !==
+      null
   ) {
     formData.append(
       'report_id',
@@ -491,7 +580,9 @@ export function createSupplement(
     '/supplements',
     {
       method: 'POST',
-      body: formData,
+
+      body:
+        formData,
     },
   )
 }
@@ -524,9 +615,10 @@ export function createBlockCorrection(
           'application/json',
       },
 
-      body: JSON.stringify(
-        payload,
-      ),
+      body:
+        JSON.stringify(
+          payload,
+        ),
     },
   )
 }
@@ -549,9 +641,10 @@ export function approveBlockCorrection(
           'application/json',
       },
 
-      body: JSON.stringify(
-        payload,
-      ),
+      body:
+        JSON.stringify(
+          payload,
+        ),
     },
   )
 }
@@ -575,6 +668,7 @@ export function ocr(
     '/ocr',
     {
       method: 'POST',
+
       body,
     },
     OCR_TIMEOUT_SECONDS,
