@@ -353,7 +353,7 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 데이터 확인 결과(수민님 2과목 최종 동기화본 2026-10-07로 해결): TAB_104_01·TH_104_01은 교재 원본에서 통합 행 문장이 조달 행에 중복 인쇄된 것이라 clean(표 rows·이론 clean_text)에서만 삭제(raw_text는 원문 유지), TH_101_02는 학습목표로 확정되어 duplicate_of_table_id와 관계 BREL_S2_00067 제거(관계 109 → 108), TAB_119_01은 `[구분, 구성요소]` 2열로 수정. 2과목 manifest의 `block_relation_count` 109는 남은 숫자 오타라 무시한다(validation_report는 108, 스크립트는 manifest 개수를 검사하지 않음).
   - 경고만 하고 적재는 진행하는 경우: 학습목표 블록에 duplicate_of_table_id가 있을 때, relation_source=`duplicate_of_table_id` 관계가 블록 필드와 맞지 않을 때(중복 판단은 블록 필드 기준), `COMMON_JSON_PENDING_BLOCK_IDS`(수정본 대기 표시, 지금은 비어 있음)에 든 블록.
   - 임베딩 시간(실측 2026-10-07, CPU, bge-m3, 배치 8): 모델 로드 29초, 블록당 0.72초 → 342블록 약 4분. 모델은 캐시(`E:\hf_models`)에서만 읽도록 설정 `EMBEDDING_OFFLINE=true`(HF_HUB_OFFLINE=1)를 추가했다.
-  - /qa는 이번에 바꾸지 않는다. 검색 대상 전환(`SEARCH_CORPUS`), 1·2과목 범위 비교 실험은 다음 PR, 관계 활용(쪽 넘김 이어짐, 이론↔표·시각자료 붙이기, D-J-005 visuals를 DB 기반으로)은 그다음 PR.
+  - /qa는 이번에 바꾸지 않는다. 검색 대상 전환(`SEARCH_CORPUS`), 1·2과목 범위 비교 실험은 다음 PR, 관계 활용(쪽 넘김 이어짐, 이론↔표·시각자료 붙이기, D-J-005 visuals를 DB 기반으로)은 그다음 PR. → 검색 대상 전환은 **D-M-033**에서 구현.
 - 대안:
   - 팀 규격 테이블 + 새 book: 위 조사의 불일치 때문에 컬럼·CHECK 우회가 많고 적재 즉시 기존 검색에 섞인다.
   - 짧은 블록을 같은 쪽 이웃과 합치기: block_id 단위가 깨진다. 이웃 문맥은 관계 활용 PR에서 근거를 붙이는 방식으로 다룬다.
@@ -376,6 +376,69 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 프론트 이름에 맞춤(재원 결정, 수지 화면 연동 커밋 12eba19 기준): `/answer-reports`는 `type`과 `report_type`을 모두 받고, `/supplements`는 본문 `content`와 `text`를 모두 받으며 `kind`를 생략하면 파일 유무·형식으로 정한다(PDF 시그니처 `%PDF-` 또는 .pdf → pdf, 그 밖의 파일 → image, 파일 없음 → text). 기존 이름도 계속 받는다.
 - 남은 것: 보충 이론 승인 → 추출·청킹·임베딩(적재 코드 담당과 협의), 관리 화면 검수 목록.
 
+## D-M-033 /qa 검색 대상을 설정값(SEARCH_CORPUS)으로 바꿀 수 있게 하고, mixed는 "공통 JSON이 있는 교재는 블록" 규칙으로 합친다 (2026-10-07, `feat/qa-corpus-switch`)
+- 배경: D-M-032로 1·2과목 공통 JSON 390블록(검색 대상 342)을 적재했지만 /qa·평가·기출 실행은 `v_searchable_theory`(theory_chunks)만 검색했다. 3과목 공통 JSON은 아직 없어 3과목은 theory_chunks를 계속 써야 한다. 재원님 신고 스냅샷(D-JW-004)은 근거 id로 theory_chunks만 조회했고, 프론트(PR #4)는 `/qa` evidence의 `n, chunk_id, book_title, page, path, raw_text, 점수, cited`를 쓴다(raw_text는 문자열로 표시).
+- 조사(읽기만): 표·시각자료 블록 79개는 `clean_text`가 비어 있고 `raw_text`가 문자열 목록이다 → 그대로 넘기면 Gemini·Jev가 빈 근거를 받고 프론트 표시가 깨진다. `documents.book_id`는 1·2과목 모두 같은 교재 book에 연결돼 있다(정답 판정에 그대로 쓸 수 있음). 적재 때 임베딩 텍스트를 만든 함수의 재료는 모두 blocks 컬럼에 남아 있다(390/390 재생성 일치).
+- 결정(사용자 승인 2026-10-07):
+  - 설정 `SEARCH_CORPUS` = `team_text` / `common_json` / `mixed`. **기본값은 `mixed`**(아래 "기본값 결정", 사용자 결정 2026-10-07. 처음 구현은 team_text 기본).
+  - **mixed 규칙**: `mingyu_app.documents`에 `corpus='common_json'`으로 연결된 book은 블록에서, 나머지 book은 theory_chunks에서 각각 후보 N개를 가져와 cosine 점수로 합친 뒤 상위 N개만 리랭크한다(같은 bge-m3 정규화 벡터라 점수 척도가 같고, 최종 순서는 리랭커가 정함, 리랭크 시간 그대로). 과목 목록을 설정·코드에 두지 않으므로 **3과목 공통 JSON을 적재하면 mixed의 3과목 검색 대상이 자동으로 블록으로 바뀐다**. 후보 출처 개수는 `candidate_sources`로 기록한다. (대안: 각 N개씩 2N개 리랭크 — 질문당 리랭크 시간 약 2배라 택하지 않음)
+  - 블록의 LLM·Jev용 본문은 `common_json.embedding_text(블록, with_path=False)`: 적재와 같은 함수에 제목 경로 줄만 빼는 인자를 추가했다(기본 출력은 그대로라 재적재 불필요, 단위 테스트로 고정). 임베딩 텍스트 문자열을 잘라 만들지 않는다. 리랭커 입력은 저장된 embedding_text 그대로.
+  - `/qa` evidence는 **필드 추가만**: `corpus, kind, block_id, title, title_path, document_title, thumbnail_url, image_url`. `chunk_id`는 corpus가 team_text면 theory_chunks.id, common_json이면 blocks.id. `raw_text`는 항상 문자열(표·그림 원문 목록은 줄바꿈으로 이음). 이미지 URL은 `ASSET_URL_TEMPLATE`(`{key}`에 저장소 키, 비면 null) — 데이터 안의 완성 URL·버킷 이름은 쓰지 않는다.
+  - query_logs: 팀 규격 `retrieved_theory_ids`에는 **theory_chunks id만**(컬럼 뜻 유지). 블록 근거는 `metadata.retrieved_block_ids`·`metadata.evidence[].block_id`, `metadata.corpus`·`candidate_sources`. `retrieved_visual_ids`(팀 규격 visual_assets용)는 쓰지 않는다. 컬럼·DDL 변경 없음.
+  - 신고 스냅샷은 이 PR에서 고친다(형식을 바꾼 쪽에서 맞춤, 재원님 리뷰 요청): `get_blocks` 추가, `create_report`가 block_id 있는 근거는 blocks에서 조회, `build_snapshot`은 행의 path 우선 + 스냅샷 키에 corpus·kind·block_id, `EvidenceIn`에 같은 선택 필드.
+  - 평가: `evaluate --corpus a,b,c --subjects …`(같은 질문 임베딩·같은 리랭커), 블록 정답 판정도 book_id(documents.book_id) + 인쇄 쪽. 질문별 3구간·1위 근거 종류를 세고 비교표에 hit@k·MRR, 자료 없음·답 가능 질문의 3구간 수, 1위 벡터·리랭커 점수 분포를 함께 낸다. 기출은 `mcq_run run --subjects`, 검색 대상은 서버 `SEARCH_CORPUS`(결과 meta.corpus).
+  - "확인 불가" 기준값(벡터 0.45 / 리랭커 0.03 / 0.15)과 Jev 임계값(0.5 / 0.8)은 이 PR에서 바꾸지 않는다.
+- 범위 밖: 관계 활용(쪽 넘김 이어짐, 이론↔표·시각자료 붙이기)과 visuals(PR3), 프론트 표시(썸네일 등), 기본값 변경.
+- 비교 실험 계획(처음): 검색 평가 + 기출을 team_text·common_json·mixed로 각각 실행(기출 약 40회). **마감(2026-10-08) 때문에 기출은 기본값(mixed) 15문제 1회로 줄이고, 기준선은 기존 `20261001-183551`(12/0/2/1)로 했다.**
+- 검색 평가 결과(2026-10-07, 리랭커 bge-reranker-v2-m3, N=10, K=5, Gemini 0회. `data/reports/eval/20261007-202404-*`, `20261007-203331-*`):
+
+  | 범위 | 검색 대상 | hit@1 | hit@3 | hit@5 | MRR | 자료 없음 reject/gray/answer | 답 가능 reject/gray/answer |
+  |---|---|---|---|---|---|---|---|
+  | 1·2과목(답 가능 16 + 자료 없음 7) | team_text | 13/16 | 16/16 | 16/16 | 0.906 | 7/0/0 | 0/0/16 |
+  | | common_json | 13/16 | 15/16 | 16/16 | 0.891 | 7/0/0 | 0/1/15 |
+  | 전체 33문항(답 가능 26 + 자료 없음 7) | team_text | 22/26 | 26/26 | 26/26 | 0.917 | 6/1/0 | 0/2/24 |
+  | | mixed | 22/26 | 25/26 | 26/26 | 0.907 | 6/1/0 | 0/3/23 |
+
+  - 자료 없음 질문은 어느 대상에서도 answer 0(common_json 리랭커 1위 최대 0.004). mixed의 자료 없음 gray 1개는 team_text와 같은 문항(n08, 3과목 청크).
+  - 1위 근거가 표·그림인 경우: mixed 답 가능 26개 중 table 3 · visual 2(예: b02 KDD/CRISP-DM 비교 표 TAB_79_01이 1위가 되어 2위→1위).
+- 기출 객관식 결과(2026-10-07, 서버 mixed, `data/reports/mcq/20261007-204900.json` + `.grades.json`, 비교 `compare-20261007-205017.md`):
+
+  | 실행 | 맞음 | 틀림 | 확인 불가 | 모호 |
+  |---|---|---|---|---|
+  | 기준선 20261001-183551(team_text) | 12 | 0 | 2 | 1 |
+  | mixed | 12 | 0 | 3 | 0 |
+
+  - 바뀐 문항: p26-3 확인 불가→맞음(④). p56-1 맞음→확인 불가(LLM 판단 오류: 해설이 근거 [2] p55 "일차원적 분석으로도 상당한 효과"를 인용하고도 ①을 고르지 않음, 기준선 1위였던 56쪽 청크는 상위 5개에 없음). p84-1 모호→확인 불가(교재에 근거 없음, 규칙대로 거절). p50-2는 기준선과 같은 확인 불가(1위가 p50 "학습정리" 블록). computed 0.
+- **기본값 결정(사용자, 2026-10-07)**: `SEARCH_CORPUS` 기본 `mixed`.
+  - 근거 1: 검색 평가에서 hit@1·hit@5·자료 없음 차단이 team_text와 같고(MRR 0.917→0.907), 표·그림 블록이 1위로 올라오는 경우가 생긴다. 기출은 맞음 12·틀림 0으로 기준선과 같다(통과 기준: 틀림 0 유지, 맞음 12 이상).
+  - 근거 2: 재원님 이론 수정 기능(D-JW-007 예정, 2026-10-07 기준 아직 PR·결정 기록 없음)이 block_id로 이론 블록을 고치는 설계라, 사용자가 보는 1·2과목 근거가 블록이어야 수정 흐름이 이어진다.
+  - 3과목은 공통 JSON이 적재되기 전까지 theory_chunks 그대로(mixed 규칙).
+- 알려진 위험: "학습정리" 요약 블록이 본문보다 앞에 오는 경우가 있다. a05는 TH_43_02(학습정리)가 1위가 되어 정답 쪽이 1위→4위, answer→gray. a04도 학습정리 TH_40_01이 1위였지만 정답 쪽이라 hit. 기출 p50-2도 1위가 TH_50_01(학습정리). (a08은 학습정리가 8위, 1위는 VIS_59_01로 정답 쪽.) 학습목표처럼 검색에서 뺄지는 평가 재실행이 필요해 이번에는 보류.
+- 기준값(0.45 / 0.03 / 0.15)·Jev(0.5 / 0.8)는 바꾸지 않았다.
+
+## D-JW-001 문제 사진 OCR API는 프론트 화면 흐름에 맞추고 기존 PaddleOCR을 재사용한다 (2026-10-06)
+- 배경: 프론트 UI PR(`feat/frontend-ui`)의 문제 사진 입력(`QuestionForm`)은 사진 → "추출된 문제" 칸 채우기 → 사용자가 고침 → `/qa` 흐름이고, OCR API가 없어 미리보기까지만 되어 있다.
+- 결정: `POST /ocr`은 문제 사진을 저장하지 않고 텍스트만 돌려준다. 사용자가 텍스트를 고친 뒤 `/qa`로 보내므로, 비전 LLM으로 바로 푸는 `/qa/image` 대신 업로드 경로의 인쇄체 PaddleOCR 엔진을 재사용한다(추가 API 비용·모델 없음, DB 사용 없음).
+- 줄 순서: 세로 중심 기준 위→아래, 같은 높이(앞 줄 높이의 절반 이내)는 왼→오른으로 공백 연결.
+
+## D-JW-002 문제 사진 추출은 Gemini 비전을 기본으로, PaddleOCR은 대체 경로로 (2026-10-06, D-JW-001 일부 변경)
+- 배경: 실제 휴대폰 사진(기울어짐·페이지 휨·뒷장 비침·위아래에 다른 문제)으로 `/ocr`(PaddleOCR)을 시험하니 문제 문장과 ①② 보기를 놓치고, 비친 글자("통H허호…")와 아래 문제 문장을 섞어 읽었다. 이대로 `/qa`에 넣으면 질문 자체가 바뀐다(예: "옳은 것" → "옳지 않은 것").
+- 결정: `/ocr`은 Gemini 비전 구조화 출력(`found`, `problem_text`, `choices`, `figure_description`)으로 가장 온전한 문제 1개만 옮겨 적게 한다. 모델은 `PROBLEM_EXTRACT_MODEL`(기본 lite), 프롬프트는 `backend/app/prompts/problem_extract_*`. 키가 없거나 호출이 실패하면 기존 PaddleOCR로 읽고 `fallback_reason`을 남긴다. PaddleOCR 엔진 설정(`ingestion/ocr.py`)은 교재 업로드와 공유하므로 바꾸지 않는다.
+- 이미지 입력: `GeminiClient.generate_json(..., images=[(바이트, MIME)])` → user 텍스트 파트 뒤에 `inlineData {mimeType, data(base64)}` 파트. 확인 2026-10-06: https://ai.google.dev/api/caching#Part (Part.inlineData / Blob), 요청 전체 20MB 이하·텍스트 다음에 이미지 권장 https://ai.google.dev/gemini-api/docs/image-understanding .
+- 비용·한도: 사진 1장당 Gemini 호출 1회(무료 한도 공유). DB는 쓰지 않는다.
+
+## D-JW-003 문제 사진 OCR에 Google Cloud Vision 엔진을 추가한다(기본은 gemini) (2026-10-06, 2026-10-07 기본값 변경)
+- 배경: 재원 결정으로 문제 사진 글자 인식은 Google Cloud Vision을 쓴다. Gemini 방식(D-JW-002)은 지우지 않고 `PROBLEM_OCR_ENGINE=gemini`로 고를 수 있게 둔다.
+- 결정: `PROBLEM_OCR_ENGINE`(기본 `gemini`, `google_vision`은 키가 있을 때 선택). Vision은 REST `POST https://vision.googleapis.com/v1/images:annotate`에 `DOCUMENT_TEXT_DETECTION` + `languageHints`(`GOOGLE_VISION_LANGUAGE_HINTS`, 기본 ko)로 보내고 `fullTextAnnotation.text`를 그대로 돌려준다. 키(`GOOGLE_VISION_API_KEY`)는 `x-goog-api-key` 헤더로만 보낸다. 키가 없거나 실패하면 PaddleOCR로 대신 읽는다.
+- 기본값 변경(2026-10-07, PR 전): 처음에는 기본을 `google_vision`으로 했으나 `gemini`로 되돌린다. 팀원 모두 답변용 `GEMINI_API_KEY`가 있고 Vision 키(결제 계정 필요)는 없어서, 기본이 Vision이면 `.env.example`을 복사한 팀원은 매번 PaddleOCR 대체 경로(인식 품질 낮음)로만 돈다. 실제 문제 사진(지니 지수 31번)에서 Gemini가 문제·선택지·그림 설명을 정확히 옮긴 것도 확인했다. Vision은 키를 넣고 `PROBLEM_OCR_ENGINE=google_vision`으로 고른다.
+- 한계: Vision은 사진의 글자를 모두 읽으므로 위아래에 걸린 다른 문제·비친 뒷장 글자가 섞일 수 있다. 문제 1개만 골라내기·선택지 나누기는 하지 않고 사용자가 입력칸에서 고친다.
+- 리뷰 반영(민규, PR #8, 2026-10-07):
+  - 크기: /ocr만 `PROBLEM_OCR_MAX_UPLOAD_MB`(기본 12). Gemini 인라인 요청은 20MB까지라 base64(약 1.33배)를 붙이면 15MB쯤부터 400이 난다. `OCR_*`는 PaddleOCR 설정 접두어라 `PROBLEM_OCR_*`로 맞췄다.
+  - PaddleOCR까지 실패(모델 파일 없음 등)하면 500 대신 503 + "문제를 직접 입력해 주세요".
+  - 프론트 대기 시간: `VITE_OCR_TIMEOUT_SECONDS`(기본 330초)를 /qa와 따로 둔다. 서버 최악 경로 = Gemini 4번 시도(60초×4 + 대기 2+4+8초, `GEMINI_MAX_RETRIES`=3) + PaddleOCR 첫 로드(약 60초) ≈ 314초. `PROBLEM_EXTRACT_MODEL=strong`이면 strong→lite 폴백까지 시도해 약 2배로 늘어난다.
+  - 남은 것: /ocr 전용 재시도 횟수(`PROBLEM_OCR_MAX_RETRIES`)는 다음 PR. 화면(QuestionForm)의 OCR 중 입력 막기·기존 입력 보호는 수지 담당.
+- 확인 2026-10-06: 요청·응답 형식 https://docs.cloud.google.com/vision/docs/ocr , 인증("API key or OAuth token") https://docs.cloud.google.com/vision/docs/request , 가격(기능별 월 1,000단위 무료, 이후 1,000단위당 $1.50, **무료 구간도 결제 계정 필요**) https://cloud.google.com/vision/pricing .
+
 ## D-JW-006 답변 프롬프트에 계산 문제 규칙(규칙 9)을 추가한다 (2026-10-07)
 - 배경: 기출 "의사결정나무에서 B(Good 10, Bad 40)의 지니 지수"(정답 ④ 0.32) 질문에서 검색은 지니 지수 공식(3과목 301쪽)과 계산 예시(300쪽)를 찾았지만, 답변이 "공식은 있으나 B의 계산 결과는 근거에 없다"며 확인 불가로 거절했다. 규칙 1("근거에 없는 내용은 한 문장도 쓰지 않는다")·규칙 8(긍정형은 근거가 뒷받침하는 보기)에 계산 문제 규칙이 없어, 공식에 문제 수치를 대입한 결과까지 "근거에 없는 내용"으로 본 것이다. 데이터가 없는 것이 아니라 규칙 때문에 거절했다(화면에 "관련 이론 추가하기"가 떠 사용자를 헷갈리게 함).
 - 결정: `prompts/answer_system.txt`에 규칙 9 추가, 규칙 1·2에 예외 한 줄. 근거에 공식·계산 방법이 있으면 질문의 수치를 대입해 계산하고(계산 과정은 근거에 없는 내용으로 보지 않음), 공식 문장에 근거 번호를 붙인다. 근거에 공식이 없으면 여전히 거절(기억으로 공식을 만들지 않음). 객관식은 규칙 8 형식(보기별 한 줄)으로, 긍정형은 계산 값과 같은 보기, 부정형("계산 결과가 옳지 않은 것")은 계산 값과 다른 보기를 고른다 — `mcq_check` 보기별 판단 대조와 맞추기 위해. 대입식·결과 줄에도 공식의 근거 번호 [n]을 붙인다(빠지면 `citation_check.uncited_sentence_count`가 부풀려짐). 표에서 값을 모아야 하면 해당 행을 모두 나열해 더한 식을 쓰고, 질문에 없는 값을 가정하지 않는다.
@@ -390,3 +453,23 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 같은 프롬프트로 ANSWER_MODEL=strong: 한 번은 "200/400 = 0.50"처럼 행을 잘못 골라 ②(확신 높음), 한 번은 해설은 "구할 수 없다"인데 답은 ②(`mcq_check` 모순 → 확신 낮음). strong도 표 집계를 믿을 수 없어 lite 유지.
   - 정리: 공식에 수치를 바로 넣는 계산(지니 지수)은 되고, 표에서 행을 골라 더하는 집계형 계산은 LLM으로 신뢰할 수 없다. 집계형은 거절("자료 부족 → 관련 이론 추가하기")을 정상 동작으로 본다.
 - 남은 위험: LLM 계산·집계 실수(보기 판정만 맞으면 `mcq_check`를 통과함). 근본 대책 후보는 질문의 표를 구조화해 코드로 집계·계산하는 것(다음 작업 제안). 민규 기출 15문제(`mcq_run`)와 사례 2개(/qa 직접) 회귀 확인 후 머지한다.
+
+## D-JW-007 오류 신고 처리 기록과 이론 블록 수정안(block_corrections) — 005 마이그레이션 (2026-10-07)
+- 배경: 강사 요구 "틀린 이론 수정". 오류 신고(D-JW-004)를 받기만 하고 처리 결과와 교재 원문 수정 경로가 없었다. 검색 대상이 공통 JSON 블록(`mingyu_app.blocks`, D-M-032)으로 옮겨 가므로 수정 대상도 blocks로 하고, 재적재해도 안 바뀌는 `block_id`로 가리킨다(민규 협의).
+- 범위(1차): 이론 블록(`block_type = theory`)의 `clean_text`만. `raw_text`·표·시각자료는 고치지 않는다(표·시각자료는 `table_data`·`visual_data`에 내용이 있어 clean_text 수정으로 못 고침 → 데이터 담당 JSON 수정 요청 `source_fix_requested`로 닫음).
+- 005 변경(`mingyu_app`만, 팀 규격 테이블 변경 없음):
+  - `blocks.source_clean_text_hash`: JSON 원문 clean_text 해시. 005에서 SQL로 채움(지금은 적용된 수정이 없어 DB clean_text = JSON 원문). clean_text가 NULL이면 NULL.
+  - 해시 규칙(기준 함수 `app/core/text_hash.py` `clean_text_hash`): CRLF·CR → LF → 앞뒤 스페이스·탭·LF만 제거 → UTF-8 sha256 hex. Python `strip()`은 모든 유니코드 공백을, PostgreSQL `btrim()`은 기본으로 스페이스만 지워서 지울 문자를 `" \t\n"`으로 명시했다. SQL 식과 Python 값이 같은지, 백필 값이 맞는지 `tests/test_text_hash.py`로 묶었다.
+  - `answer_reports`: `resolution`(block_corrected / supplement_added / source_fix_requested / prompt_issue / retrieval_issue / not_an_error / duplicate / other), `resolution_note`(500자), `linked_block_ids`(team_text 근거 신고를 대응 block_id에 연결), `reviewed_by`(100자). `status`는 open/resolved 그대로, resolved면 resolution 필수.
+  - `block_corrections`: block_id(FK 없음 — 블록이 JSON에서 빠져도 적재를 막지 않게), report_id(FK, SET NULL), base_clean_text(작성 당시 DB clean_text, 비교 화면용), base_clean_text_hash(작성 당시 `source_clean_text_hash` 복사 — DB clean_text 해시가 아님), new_clean_text(1~2,000자, 공백만 거부), reason, status, review_note, reviewed_by, applied_note, created_at·reviewed_at·applied_at. 블록당 approved/applied는 1개(부분 유니크).
+  - 길이 한도 근거(2026-10-07 조회, 2026-10-08 민규 확인): 1·2과목 이론 311개(1과목 138 / 2과목 173) 기준 clean_text 최대 694자(1과목, 2과목 최대 664자), 99% 586자. 1.5배(1,041자)에 3과목 적재 여유를 두어 2,000자.
+- 흐름(마감 축소판, 민규 요청): 승인하면 API가 바로 블록 clean_text를 고치고 재임베딩한다(`common_json.embedding_text` 그대로).
+  - 승인 시 API는 `clean_text`·`embedding`만 고치고 `blocks.source_clean_text_hash`는 바꾸지 않는다(JSON 원문 기준 해시로 유지, 재적재 때 원문이 바뀌었는지 비교하는 기준).
+  - proposed → (승인) applied / (반려) rejected / (철회) withdrawn
+  - applied → 같은 블록의 새 수정 적용 시 superseded(같은 트랜잭션에서 먼저 처리)
+  - approved·stale은 적재 코드가 승인된 수정을 다시 적용하는 후속 단계용으로 CHECK에만 둔다.
+- 알려진 한계:
+  - 적재 코드(common_json_load)가 JSON 원문으로 upsert하므로, 재적재하면 적용된 수정이 덮어써진다. 수정 기록(block_corrections)은 남으므로 후속 단계에서 적재 코드가 applied 수정을 다시 적용하고, 원문 해시가 다르면 stale로 바꾼다.
+  - 승인 API에 인증이 없다(내부용). reviewed_by는 직접 입력한 이름이라 검증되지 않는다.
+  - 길이 한도 2,000자는 1·2과목 기준. 3과목 적재 후 최대 길이가 1,300자를 넘으면 마이그레이션으로 다시 정한다.
+- 역할: 005·API는 재원, 적용(DB)은 민규. API는 PR #10(evidence에 block_id) 머지 후.

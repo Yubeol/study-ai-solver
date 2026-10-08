@@ -13,6 +13,10 @@ export default defineConfig(({ mode }) => {
           target: apiTarget,
           changeOrigin: true,
         },
+        '/ocr': {
+          target: apiTarget,
+          changeOrigin: true,
+        },
         '/answer-reports': {
           target: apiTarget,
           changeOrigin: true,

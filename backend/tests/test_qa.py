@@ -14,6 +14,7 @@ from app.judge import JudgeResult
 from app.llm.gemini import GeminiClient, GeminiError, JsonResult
 from app.qa import service
 from app.qa.service import QaModels, answer_question, count_uncited_sentences, heading_path, validate_citations
+from app.retrieval.search import block_row, theory_row
 
 
 class FakeEmbedder:
@@ -57,6 +58,11 @@ def _rows(n=3, vector_top=0.6):
     ]
 
 
+def _search(rows):
+    """가짜 search_candidates: 이론 청크 행을 검색 대상 공통 모양으로 맞춰 n개."""
+    return lambda conn, s, vec, n, corpus=None, **kw: [theory_row(r) for r in rows[:n]]
+
+
 @pytest.fixture
 def logged(monkeypatch):
     out = []
@@ -73,7 +79,7 @@ def qa_settings(settings):
 
 
 def _run(monkeypatch, qa_settings, rows, rerank_scores, llm):
-    monkeypatch.setattr(service, "search_theory", lambda conn, s, vec, k: rows[:k])
+    monkeypatch.setattr(service, "search_candidates", _search(rows))
     models = QaModels(FakeEmbedder(), FakeReranker(rerank_scores) if rerank_scores else None, llm, None)
     return answer_question(None, qa_settings, models, "질문")
 
@@ -168,7 +174,7 @@ GRAY = [0.05, 0.10, 0.01]  # 리랭커 1위 0.10 → 회색 구간
 
 
 def _run_judge(monkeypatch, qa_settings, judge, llm, question="질문"):
-    monkeypatch.setattr(service, "search_theory", lambda conn, s, vec, k: _rows()[:k])
+    monkeypatch.setattr(service, "search_candidates", _search(_rows()))
     models = QaModels(FakeEmbedder(), FakeReranker(GRAY), llm, judge)
     s = qa_settings.model_copy(update={"judge_can_answer_min": 0.5, "judge_confident_min": 0.8})
     return answer_question(None, s, models, question)
@@ -209,7 +215,7 @@ def test_gray_judge_error_falls_back_to_none_behavior(monkeypatch, qa_settings, 
 
 def test_answer_zone_does_not_call_judge(monkeypatch, qa_settings, logged):
     judge = FakeJudge(0.9)
-    monkeypatch.setattr(service, "search_theory", lambda conn, s, vec, k: _rows()[:k])
+    monkeypatch.setattr(service, "search_candidates", _search(_rows()))
     answer_question(None, qa_settings, QaModels(FakeEmbedder(), FakeReranker([0.9, 0.5, 0.1]), _answer_llm(), judge), "질문")
     assert judge.calls == [] and logged[-1]["metadata"]["judge"] is None
 
@@ -218,7 +224,7 @@ def test_mcq_inconsistent_marks_low_confidence(monkeypatch, qa_settings, logged)
     q = "다음 중 옳지 않은 것은?\n① 가\n② 나\n③ 다\n④ 라"
     llm = FakeLlm({"unanswerable": False, "answer": "정답은 ①이다 [1].", "cited": [1], "confusions": "",
                    "explanation": "①은 근거에서 확인되지 않는다.\n②는 근거에서 확인되지 않는다.\n③은 적절하다 [1].\n④는 적절하다 [2]."})
-    monkeypatch.setattr(service, "search_theory", lambda conn, s, vec, k: _rows()[:k])
+    monkeypatch.setattr(service, "search_candidates", _search(_rows()))
     r = answer_question(None, qa_settings, QaModels(FakeEmbedder(), FakeReranker([0.9, 0.5, 0.1]), llm, None), q)
     assert (r["status"], r["answer"], r["low_confidence"]) == ("answered", "정답은 ①이다 [1].", True)
     assert r["low_confidence_reasons"] == ["mcq_inconsistent"]
@@ -249,6 +255,40 @@ def test_answer_zone_high_confidence_and_log(monkeypatch, qa_settings, logged):
     assert "구분" in kw["answer"] and kw["token_usage"] == {"totalTokenCount": 10}
     assert kw["metadata"]["cited"] == [1, 2] and kw["metadata"]["model"] == "fake-model"
     assert set(kw["metadata"]["timings_ms"]) >= {"embed_ms", "vector_ms", "rerank_ms", "llm_ms", "total_ms"}
+
+
+OLD_EVIDENCE_KEYS = {"n", "chunk_id", "book_title", "page", "path", "raw_text", "vector_score", "rerank_score", "cited"}
+
+
+def _table_block_row(settings):
+    r = {"id": uuid4(), "block_id": "S2:TABLE:TAB_79_01", "block_type": "table", "title": "가짜 비교 표",
+         "title_path": ["2장 가짜", "가짜 비교 표"], "raw_text": ["칸1", "칸2"], "clean_text": None,
+         "table_data": {"headers": ["구분", "값"], "rows": [["가", "나"]]}, "visual_data": None,
+         "embedding_text": "2장 가짜 > 가짜 비교 표\n[표] 가짜 비교 표\n- 구분: 가 | 값: 나", "thumbnail_s3_key": "t/x.jpg",
+         "crop_s3_key": "c/x.jpg", "printed_page_number": 79, "book_id": uuid4(), "book_title": "2과목",
+         "document_title": "2과목 가짜", "score": 0.7}
+    return block_row(settings, r)
+
+
+def test_block_evidence_and_log(monkeypatch, qa_settings, logged):
+    """블록 근거: LLM에 표 행 텍스트, 응답에 필드 추가(기존 키 유지), 기록은 theory id와 block id를 나눈다."""
+    s = qa_settings.model_copy(update={"search_corpus": "mixed", "asset_url_template": "https://cdn.example/{key}"})
+    rows = [_table_block_row(s), theory_row(_rows()[0])]
+    monkeypatch.setattr(service, "search_candidates", lambda conn, st, vec, n, corpus=None, **kw: rows[:n])
+    llm = FakeLlm({"unanswerable": False, "answer": "답 [1]", "explanation": "설명 [2]", "confusions": "", "cited": [1, 2]})
+    r = answer_question(None, s, QaModels(FakeEmbedder(), FakeReranker([0.9, 0.5]), llm, None), "질문")
+    assert "[표] 가짜 비교 표\n- 구분: 가 | 값: 나" in llm.calls[0] and "제목 경로: 2장 가짜 > 가짜 비교 표" in llm.calls[0]
+    e1, e2 = r["evidence"]
+    assert set(e1) >= OLD_EVIDENCE_KEYS and set(e2) >= OLD_EVIDENCE_KEYS and "clean_text" not in e1
+    assert (e1["corpus"], e1["kind"], e1["block_id"], e1["page"]) == ("common_json", "table", "S2:TABLE:TAB_79_01", "79")
+    assert e1["raw_text"] == "칸1\n칸2" and e1["thumbnail_url"] == "https://cdn.example/t/x.jpg"
+    assert (e2["corpus"], e2["kind"], e2["block_id"], e2["thumbnail_url"]) == ("team_text", "theory", None, None)
+    assert r["corpus"] == "mixed" and r["candidate_sources"] == {"common_json": 1, "team_text": 1}
+    kw = logged[-1]
+    assert kw["retrieved_theory_ids"] == [e2["chunk_id"]]  # 팀 규격 컬럼에는 이론 청크 id만
+    m = kw["metadata"]
+    assert m["corpus"] == "mixed" and m["retrieved_block_ids"] == ["S2:TABLE:TAB_79_01"]
+    assert m["evidence"][0]["block_id"] == "S2:TABLE:TAB_79_01" and m["evidence"][0]["kind"] == "table"
 
 
 def test_llm_unanswerable_and_no_citation(monkeypatch, qa_settings, logged):
@@ -330,7 +370,7 @@ def test_qa_api(monkeypatch, logged):
     app.dependency_overrides[get_conn] = fake_conn
     with TestClient(app) as client:
         assert client.post("/qa", json={"question": "질문"}).status_code == 503  # 모델 미로드(지연 로딩 안 함)
-        monkeypatch.setattr(service, "search_theory", lambda conn, s, vec, k: _rows()[:k])
+        monkeypatch.setattr(service, "search_candidates", _search(_rows()))
         llm = FakeLlm({"unanswerable": False, "answer": "답 [1]", "explanation": "", "confusions": "", "cited": [1]})
         app.state.qa_models = QaModels(FakeEmbedder(), FakeReranker([0.9, 0.5, 0.1]), llm, None)
         r = client.post("/qa", json={"question": "질문", "k": 2})

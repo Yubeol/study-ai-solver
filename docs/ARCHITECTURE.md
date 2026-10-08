@@ -34,7 +34,7 @@ adsp-study-rag/
 - `POST /books` {title, subject, material_type, edition?, source_name?} / `GET /books?subject=` / `GET /books/{id}` (page_count, status_counts 포함)
 - `POST /books/{id}/pages` (multipart `files` 여러 장, PNG/JPEG/WEBP, 장당 `MAX_UPLOAD_MB`) → 202 {run_id, pages}. 전부 검증 후 저장, 한 장이라도 실패하면 아무것도 저장하지 않음
 - `GET /books/{id}/pages`, `GET /processing-runs/{run_id}` (run 요약 + 페이지별 상태·현재 단계·오류)
-- `POST /qa` {question, k?} → {status(answered/unanswerable/error), zone(reject/gray/answer), zone_reason, confidence(high/low/unanswerable), low_confidence, low_confidence_reasons, judge(회색 구간 판정 기록), mcq_check(객관식이면 일관성 검사), answer, explanation, confusions, citations[인용된 근거: n, chunk_id, book_title, page, path, raw_text, 점수], evidence[넘긴 근거 전체], scores, timings_ms, llm{model, usage, citation_check, failed_attempts}, query_log_id}. 모델 미로드면 503
+- `POST /qa` {question, k?} → {status(answered/unanswerable/error), zone(reject/gray/answer), zone_reason, confidence(high/low/unanswerable), low_confidence, low_confidence_reasons, judge(회색 구간 판정 기록), mcq_check(객관식이면 일관성 검사), answer, explanation, confusions, citations[인용된 근거: n, chunk_id, book_title, page, path, raw_text, 점수 + corpus, kind, block_id, title, title_path, document_title, thumbnail_url, image_url], evidence[넘긴 근거 전체], corpus, candidate_sources, scores, timings_ms, llm{model, usage, citation_check, failed_attempts}, query_log_id}. 모델 미로드면 503. 자세한 형식은 `docs/API.md`
 - 응답에서 저장소 URI(source_s3_uri)는 뺀다.
 - 테스트: 루트에서 `uv run pytest`
 
@@ -129,7 +129,7 @@ adsp-study-rag/
   - 반입 결과: 3권 324페이지 EXTRACTED, run PARTIAL. 리포트 `data/reports/team_import/apply_{key}.json`
 - PaddleOCR 경로는 새로 업로드하는 캡처용으로 유지한다(우선순위만 뒤로).
 
-### 공통 JSON 적재 (구현 2026-10-07, D-M-032 — /qa 연결은 다음 PR)
+### 공통 JSON 적재 (구현 2026-10-07, D-M-032 — /qa 검색 대상 연결은 아래 "검색 대상 전환", D-M-033)
 데이터 담당의 공통 JSON(`COMMON_JSON_DIR/subject{n}/`의 `*_blocks.json`·`*_relations.json`·manifest·validation_report)을 팀 텍스트 데이터(theory_chunks)와 **따로** mingyu_app에 넣는다. 33문항·기출로 비교한 뒤 교체 여부를 정한다.
 - 테이블(004): `documents`(문서 1행 = 과목 1개, `document_key` = `{format}:subject{n}`, corpus `common_json`, 같은 교재의 기존 book_id) → `blocks`(블록 1행 = 검색 단위 1개, `block_id` 전체 고유) → `block_relations`((from, to) 고유, relation_source·relation_types 보존). 문서를 지우면 블록·관계가 CASCADE로 지워진다. 검색 대상 뷰 `v_searchable_blocks`(search_enabled + 임베딩 있음 + needs_review=false), HNSW는 `WHERE search_enabled AND embedding IS NOT NULL`.
 - 읽기: 버전 문자열로 분기하지 않고 필드가 있으면 쓴다. 컬럼에 없는 원본 필드는 `blocks.source`, 원문은 `raw_text`(JSONB, 원본 형태 그대로). 표·시각자료의 빈 block_role은 content. 중복 이론은 블록의 `duplicate_of_table_id`(source_id → `S{n}:TABLE:…`)로 판단.
@@ -196,6 +196,7 @@ adsp-study-rag/
   - LLM이 unanswerable=true면 "자료에서 확인 불가"(3구간 뒤 한 겹 더). 유효 인용이 하나도 없으면 low_confidence.
   - 인용 검증: cited·본문 [n] 중 1..K 밖 번호는 제거하고 `citation_check`(invalid_cited, invalid_inline, inline_not_in_cited)에 기록. `[1, 2]` 형식도 인식. explanation·confusions의 인용 없는 문장 수도 기록(uncited_sentences, uncited_sentence_count — 기록만, 답을 고치지는 않음).
 - 기록: 팀 규격 `query_logs` 1행(question_text, retrieved_theory_ids=넘긴 근거 청크 id, answer=답+설명+구분, latency_ms, token_usage=Gemini usageMetadata, metadata={zone, zone_reason, status, scores, confidence, low_confidence_reasons, judge(probability·can_answer·confident·thresholds·latency_ms·usage·attempts·error), mcq_check, timings_ms(embed/vector/rerank/judge/llm/total), evidence(n·chunk_id·쪽·점수·cited), cited, citation_check, model, failed_attempts, …}). **컬럼 추가 없음**(metadata JSONB 사용). mingyu_app.solutions/solution_evidence 상세 저장은 아직 안 함.
+  - (D-M-033) `retrieved_theory_ids`에는 theory_chunks id만 넣는다(팀 규격 컬럼 뜻 유지). 블록 근거는 `metadata.retrieved_block_ids`, `metadata.evidence[]`에 corpus·kind·block_id·title, `metadata.corpus`·`candidate_sources`. 오류 신고 스냅샷은 근거에 block_id가 있으면 blocks를 조회한다.
 - 샘플 실행: `python -m app.qa.sample_run --ids c06,c09,...`(서버 실행 중, 한 번에 최대 12문항) → `data/reports/answers/{시각}.json/.md`
 - 답변 온도 `ANSWER_TEMPERATURE`=0(비교 실험용 고정, D-025 추가).
 - 객관식 일관성 검사(D-028, `app/qa/mcq_check.py`): 답변이 나오면 보기 줄별 판정(적절하다/적절하지 않다/확인되지 않는다)과 고른 번호를 대조한다. 부정형은 '적절하지 않다' 1개 = 고른 번호, 긍정형은 '적절하다' 1개 = 고른 번호, 고른 줄이 '확인되지 않는다'면 모순. 모순이면 답은 그대로 두고 확신 낮음 + `metadata.mcq_check`. 저장된 결과 재검사는 `mcq_run check`.
@@ -223,6 +224,13 @@ adsp-study-rag/
 ### 검색 단계 상세 (리랭커 구현 2026-09-30, 키워드 검색은 미검증)
 - 현재 구현: 벡터 후보 `SEARCH_CANDIDATES_N`(10)개(`app/retrieval/search.py`의 `search_theory`, v_searchable_theory, cosine) → 리랭커(`app/retrieval/rerank.py`, `RERANKER_MODEL`=`BAAI/bge-reranker-v2-m3`, CrossEncoder + sigmoid, 입력 `RERANKER_INPUT`=embedding_text) → 상위 `SEARCH_TOP_K`(5)개. 리랭크 결과 행에는 `vector_rank`·`vector_score`·`rerank_score`가 붙는다. `RERANKER_MODEL`이 비면 벡터 순위 그대로. 모델은 프로세스당 1개(임베딩과 같은 HF_HOME 캐시), CPU에서 질문당 평균 6초(D-024).
 - 목표 구조: 벡터(+키워드) 후보 **N개** → 리랭커 → 상위 **K개**. 키워드 후보 합치기는 아직 없음.
+
+#### 검색 대상 전환 (구현 2026-10-07, D-M-033)
+- 설정 `SEARCH_CORPUS`: `team_text`(`v_searchable_theory`) / `common_json`(`mingyu_app.v_searchable_blocks`) / `mixed`(기본, 2026-10-07 D-M-033). 진입점은 `search.search_candidates`(질의 흐름·평가·확인용 CLI가 같이 씀).
+- **mixed 규칙**: `mingyu_app.documents`에 `corpus='common_json'`으로 연결된 book(`documents.book_id`)은 블록에서, 나머지 book은 이론 청크에서(그 book 제외) 각각 후보 N개 → 두 쪽 모두 bge-m3 정규화 벡터라 cosine 점수로 합쳐 상위 N개 → 리랭커. 과목 목록은 설정에 없어서, **3과목 공통 JSON을 적재하면 mixed의 3과목 검색 대상이 자동으로 블록으로 바뀐다**. 후보 출처 개수는 `candidate_sources`로 남긴다.
+- 블록 행은 이론 청크와 같은 모양으로 맞춘다(`search.block_row`): `kind`(theory/table/visual), `corpus`, `block_id`, `title_path`·`path`, `printed_page_number`(문자열), `raw_text`(표·그림 원문 목록은 줄바꿈으로 이은 문자열), `book_id`·`book_title`(연결된 book), 이미지 URL(`ASSET_URL_TEMPLATE` + 저장소 키).
+- 블록의 LLM·판정기용 본문(`clean_text` 자리) = `common_json.embedding_text(블록, with_path=False)`: 적재 때 임베딩 텍스트를 만든 함수와 같은 함수로, 제목 경로만 뺀다(이론은 clean_text, 표는 `[표] 제목` + 행, 그림은 `[그림] 제목` + 설명·구조·그림 속 글자). DB 컬럼만으로 다시 만들며(`block_from_row`), 저장된 390블록 전부가 적재 때 값과 같음을 로컬 DB 테스트로 확인한다. 리랭커 입력은 저장된 `embedding_text` 그대로.
+- 인용 검증([n])은 근거 번호만 보므로 블록에도 그대로 동작한다.
 - 리랭커 비교 결과(D-024): `dragonkue/bge-reranker-v2-m3-ko`는 순위는 더 좋지만 정답에도 0에 가까운 점수를 줘 "확인 불가" 임계값에 못 써서 `BAAI/bge-reranker-v2-m3` 채택. 평가 스크립트는 `--reranker <모델|none> --n <N> --rerank-input <embedding_text|clean_text>`로 비교하고, 리랭크 시 질문 임베딩 후 임베딩 모델을 내리고 리랭커를 올린다(RAM).
 - 임베딩 대안 후보: `dragonkue/BGE-m3-ko` — 차원이 1024인지 확인 필요. 같으면 `EMBEDDING_MODEL` 교체 + 재임베딩만으로 비교 가능(DB 컬럼 vector(1024)는 그대로).
 - 키워드 검색 보강 후보: Kiwi(kiwipiepy) 형태소 기반, 또는 BGE-M3 sparse(lexical) 출력. 현재 인덱스인 trgm(clean_text)과 비교.
@@ -240,6 +248,7 @@ adsp-study-rag/
   - "확인 불가" 임계값 후보별(1위 점수 ≥ t면 통과): 답할 수 있는 질문 중 통과 비율(+통과하면서 K 안에 정답 있는 비율), 자료에 없는 질문 중 차단 비율
   - 결과는 `data/reports/eval/{시각}.json`(질문별 상위 결과)·`.txt`(요약)·`.html`(질문별 상위 K개 청크 + 페이지 썸네일, `eval_report.py`, 썸네일은 `thumbs/`)에 저장하고, 설정(임베딩 모델·리랭커·키워드 검색·N/K) + 요약 수치를 PR 설명(또는 관련 Issue)에 기록
 - 임베딩 모델·리랭커·키워드 검색을 바꿀 때마다 같은 세트로 다시 돌려 비교한다.
+- 검색 대상 비교(D-M-033): `--corpus team_text,common_json,mixed`(질문 임베딩·리랭커를 한 번만 올려 같은 조건으로), `--subjects subject1,subject2`(그 과목 답 가능 질문 + 자료에 없는 질문 전부, 검색도 그 과목 book만). 블록 정답 판정도 book_id(= documents.book_id) + 인쇄 쪽. 질문별 "확인 불가" 3구간(지금 기준값)과 1위 근거 종류를 세고, `{시각}-compare.txt`에 hit@k·MRR + 3구간 수, 1위 벡터·리랭커 점수 분포, 1위 근거 종류를 한 표로 낸다. 기출은 `mcq_run run --subjects`(검색 대상은 서버의 `SEARCH_CORPUS`, 결과 meta에 기록).
 - 정답 쪽 기준(D-023): **그 쪽만 보고 질문에 답할 수 있으면 정답 쪽에 포함**한다. 관련 내용이 있어도 질문이 묻는 것(이름, 두 용어가 같은지 등)에 답이 안 되면 넣지 않는다.
 
 ## 판정기 (교체 가능 모듈)

@@ -21,6 +21,7 @@
 | POST | `/books/{book_id}/pages` | 페이지 이미지 업로드 → 백그라운드 처리 시작 |
 | GET | `/processing-runs/{run_id}` | 처리 실행 하나 + 그 페이지들 |
 | POST | `/qa` | 질문 → 답변·근거 |
+| POST | `/ocr` | 문제 사진 → 문제 텍스트(Gemini 기본, 실패 시 PaddleOCR) |
 | POST | `/answer-reports` | 답변 오류 신고 저장(근거 스냅샷 포함) |
 | GET | `/answer-reports?status=&limit=` | 오류 신고 목록(최신순) |
 | PATCH | `/answer-reports/{id}` | 신고 하나의 처리 상태 변경(open/resolved) |
@@ -122,10 +123,14 @@ book 객체:
 
 흐름: 질문 임베딩 → 벡터 후보 N개(`SEARCH_CANDIDATES_N`) → 리랭커 → 상위 K개 → "확인 불가" 3구간 → (회색 구간이면 판정기) → Gemini 답변 + 인용 검증 → `query_logs` 기록. 자세한 설계는 ARCHITECTURE "질의 흐름", D-024·D-025·D-028.
 
+검색 대상은 서버 설정 `SEARCH_CORPUS`가 정합니다(요청 값으로 바꾸지 않음, D-M-033): `team_text`(팀 텍스트 이론 청크) / `common_json`(공통 JSON 블록: 이론·표·시각자료) / `mixed`(기본, 공통 JSON이 적재된 교재는 블록, 나머지 교재는 이론 청크).
+
 응답(200, 답변한 경우):
 ```json
 {
   "question": "VIF가 10 넘게 나오면 …",
+  "corpus": "mixed",
+  "candidate_sources": {"common_json": 9, "team_text": 1},
   "status": "answered",
   "confidence": "high",
   "zone": "answer",
@@ -143,8 +148,11 @@ book 객체:
   "llm": {"model": "…", "usage": {}, "failed_attempts": [], "citation_check": {}},
   "llm_unanswerable": false,
   "evidence": [{
-    "n": 1, "chunk_id": "uuid", "book_title": "…", "page": "217", "path": "제목 > 소제목",
-    "raw_text": "교재 원문 그대로", "vector_score": 0.64, "rerank_score": 0.97, "cited": true
+    "n": 1, "chunk_id": "uuid", "book_title": "…", "page": "79", "path": "제목 > 소제목",
+    "raw_text": "교재 원문 그대로", "vector_score": 0.64, "rerank_score": 0.97, "cited": true,
+    "corpus": "common_json", "kind": "table", "block_id": "S2:TABLE:TAB_79_01", "title": "KDD와 CRISP-DM 비교",
+    "title_path": ["제목", "소제목"], "document_title": "2과목 …",
+    "thumbnail_url": "https://…/thumbnails/…jpg 또는 null", "image_url": "https://…/crops/…jpg 또는 null"
   }],
   "citations": ["evidence 중 cited=true인 것"],
   "timings_ms": {"embed_ms": 100, "vector_ms": 400, "rerank_ms": 4000, "llm_ms": 1700, "total_ms": 6300},
@@ -155,7 +163,18 @@ book 객체:
 필드 메모:
 - **`evidence[].page`는 문자열**(`printed_page_number`, 예 `"217"`)입니다. 없으면 null. 프론트 타입은 `string | number | null`.
 - `answer`·`explanation`·`confusions` 안의 `[n]`은 `evidence[].n` 번호입니다. 범위 밖 번호는 서버가 지우고 `llm.citation_check`에 기록합니다.
-- `raw_text`는 교재 원문 그대로(교정 없음). LLM에는 `clean_text`를 넘기지만 응답에서는 뺍니다.
+- `raw_text`는 교재 원문 그대로(교정 없음), 항상 문자열입니다. 표·시각자료 블록은 원문이 글자 목록이라 줄바꿈으로 이어서 줍니다. LLM에는 정리된 본문(이론은 `clean_text`, 표는 행 텍스트, 시각자료는 설명·구조·그림 속 글자)을 넘기지만 응답에서는 뺍니다.
+- **`evidence[].chunk_id`는 `corpus`에 따라 가리키는 테이블이 다릅니다**: `corpus`가 `team_text`면 `theory_chunks.id`, `common_json`이면 `mingyu_app.blocks.id`. 두 경우 모두 UUID 문자열입니다.
+- 검색 대상 전환(D-M-033)으로 **추가된 필드**(기존 필드는 그대로):
+  | 필드 | 뜻 |
+  |---|---|
+  | `corpus` | `team_text` / `common_json` (이 근거가 나온 곳) |
+  | `kind` | `theory` / `table` / `visual` (`team_text`는 항상 `theory`) |
+  | `block_id` | 공통 JSON 블록 ID(예 `S2:TABLE:TAB_79_01`), `team_text`면 null |
+  | `title`, `title_path` | 근거 제목, 제목 경로 목록(`path`는 이것을 ` > `로 이은 문자열) |
+  | `document_title` | 공통 JSON 문서 제목(`team_text`면 책 제목) |
+  | `thumbnail_url`, `image_url` | 표·시각자료 블록의 썸네일·원본 crop URL. 서버 설정 `ASSET_URL_TEMPLATE`이 비어 있거나 이론이면 null |
+- 응답 최상위 `corpus`: 이 요청에 쓴 검색 대상(`SEARCH_CORPUS`). `candidate_sources`: 리랭크 전 벡터 후보 N개가 어느 쪽에서 왔는지 개수(개발 확인용).
 - `status`:
   | 값 | 뜻 | `answer` |
   |---|---|---|
@@ -186,7 +205,7 @@ book 객체:
   `{is_mcq: true, negative, chosen, option_verdicts: {"1": "적절하다" | "적절하지 않다" | "확인되지 않는다" | "알 수 없음", …}, consistent, reasons: ["사람이 읽는 문장"]}`
 - `computed`: 답변 프롬프트 규칙 9(계산 문제)로 근거의 공식에 질문 수치를 대입해 계산한 답이면 true(기록·확인용, 확신 낮음 표시는 하지 않음). 해설(`explanation`)에 공식[n]·대입식·결과가 나옵니다.
 - `llm`·`llm_unanswerable`·`cited`는 개발 확인용입니다. reject 구간이면 `llm`은 null.
-- `query_log_id`: `mingyu_app.query_logs`에 남긴 행 id(기록 실패 시 null).
+- `query_log_id`: 팀 규격 `query_logs`(`DB_SCHEMA`, 지금 `mingyu.query_logs`)에 남긴 행 id(기록 실패 시 null). `retrieved_theory_ids` 컬럼에는 `team_text` 근거(theory_chunks id)만 들어가고, 블록 근거는 `metadata.retrieved_block_ids`와 `metadata.evidence[].block_id`에 남습니다. `metadata`에는 `corpus`·`candidate_sources`도 있습니다.
 
 오류:
 | 코드 | 경우 |
@@ -214,7 +233,7 @@ book 객체:
 - `type`(또는 `report_type`, 프론트 이름): `wrong_answer`(답이 틀림) / `wrong_explanation`(해설이 틀림) / `wrong_concept`(개념·근거가 이상함) / `missing_concept`(관련 개념이 부족함) / `wrong_ocr`(문제를 잘못 읽음) / `insufficient`(설명이 부족함) / `other`
 - `question`: 1~2000자. `detail`: 0~500자. `concept_details`: 문자열 최대 10개(각 1~100자)
 - `query_log_id`(권장): `/qa` 응답의 `query_log_id`. 있으면 질문·답·근거를 그 기록에서 가져와 스냅샷으로 남깁니다(없는 id면 422).
-- `evidence`(선택): `/qa` 응답의 `evidence` 그대로. 재적재로 청크가 없어졌거나 `query_log_id`가 없을 때 스냅샷에 씁니다.
+- `evidence`(선택): `/qa` 응답의 `evidence` 그대로. 재적재로 청크가 없어졌거나 `query_log_id`가 없을 때 스냅샷에 씁니다. 받는 필드는 `n, chunk_id, book_title, page, path, raw_text, vector_score, rerank_score, cited, corpus, kind, block_id`(모두 선택)이고 나머지는 무시합니다.
 - `answer`(선택): `query_log_id`가 없을 때만 답 스냅샷으로 씁니다. 그 밖의 필드(예: `explanation`)는 무시합니다.
 
 응답:
@@ -226,12 +245,14 @@ book 객체:
   "evidence_snapshot": [{
     "n": 1, "chunk_id": "uuid", "book_title": "2024 ADsP 한 권으로 끝내기 이론편 - 1과목 데이터 이해", "page": "62",
     "path": "3장 … > 2. 빅데이터 회의론을 넘어 : 가치 패러다임의 변화", "raw_text": "교재 원문 그대로",
-    "vector_score": 0.747, "rerank_score": 0.978, "cited": true, "source": "db"
+    "vector_score": 0.747, "rerank_score": 0.978, "cited": true,
+    "corpus": "team_text", "kind": "theory", "block_id": null, "source": "db"
   }],
   "status": "open", "created_at": "2026-10-06T…", "resolved_at": null
 }
 ```
 - `evidence_snapshot[].source`: `db`(신고 시점에 청크를 조회해 채움) / `client`(요청의 `evidence`로 채움) / `missing`(둘 다 없음, `raw_text` null). `query_logs`에는 근거가 청크 id·쪽·점수로만 남아 있어서, 재적재 뒤에도 신고 당시 근거를 볼 수 있도록 원문까지 복사합니다.
+- 기록된 근거에 `block_id`가 있으면(검색 대상 `common_json`·`mixed`) `mingyu_app.blocks`에서, 없으면 `theory_chunks`에서 조회합니다(D-M-033). `corpus`·`kind`·`block_id`는 그 전 기록이면 null입니다.
 
 ### `GET /answer-reports?status=open&limit=50`
 최신순 목록. `status`: `open` / `resolved`(생략하면 전체), `limit`: 1~200(기본 50). 항목 형식은 위 응답과 같습니다.
@@ -283,3 +304,34 @@ book 객체:
 
 ### `GET /supplements?status=pending_review&limit=50`
 최신순 목록. `status`: `pending_review` / `approved` / `rejected`(생략하면 전체), `limit`: 1~200.
+
+## 문제 사진 OCR
+
+### `POST /ocr`
+요청: `multipart/form-data`, 필드 `file` = 문제 사진 1장(PNG/JPEG/WEBP, `PROBLEM_OCR_MAX_UPLOAD_MB` 이하, 기본 12MB). 사진은 저장하지 않습니다.
+
+응답(200, 기본 엔진 Gemini):
+```json
+{
+  "text": "다음의 의사결정나무에서 B의 지니지수를 계산한 결과로 적절한 것은?\n[그림·표] 노드 A(Good 30, Bad 70)가 B(Good 10, Bad 40)와 C(Good 20, Bad 30)로 나뉜다.\n① 0.5\n② 0.48\n③ 0.38\n④ 0.32",
+  "engine": "gemini",
+  "model": "gemini-…",
+  "problem_text": "다음의 의사결정나무에서 B의 지니지수를 계산한 결과로 적절한 것은?",
+  "choices": ["0.5", "0.48", "0.38", "0.32"],
+  "figure_description": "노드 A(Good 30, Bad 70)가 B(Good 10, Bad 40)와 C(Good 20, Bad 30)로 나뉜다.",
+  "fallback_reason": null
+}
+```
+- 엔진은 `.env`의 `PROBLEM_OCR_ENGINE`으로 고릅니다.
+  - `google_vision`: Google Cloud Vision `DOCUMENT_TEXT_DETECTION`(`GOOGLE_VISION_API_KEY`, `GOOGLE_VISION_LANGUAGE_HINTS`). 사진의 **글자 전체**를 읽는 순서대로 돌려줍니다. 문제 하나만 골라내거나 선택지를 나누지 않으므로(`choices`는 빈 배열) 위아래 다른 문제 글자는 사용자가 입력칸에서 지웁니다. 사진 1장 = Vision 1단위(월 1,000단위 무료).
+  - `gemini`(기본): Gemini 비전(`PROBLEM_EXTRACT_MODEL`, 프롬프트 `prompts/problem_extract_*`)으로 가장 온전한 문제 1개와 선택지만 옮겨 적습니다(`choices`, `figure_description` 채움). `choices`는 번호 기호 없이 보기 내용만, `text` = 문제 → `[그림·표] 설명` → `① …` 선택지 한 줄씩(번호 기호는 `text`를 만들 때 붙임).
+- 고른 엔진의 키가 없거나 호출이 실패하면 **PaddleOCR**로 읽습니다(`engine: "paddleocr"`). `fallback_reason`: `vision_not_configured` / `vision_failed` / `llm_not_configured` / `llm_failed`. PaddleOCR은 첫 호출 때 모델을 올려서 느립니다. 프론트는 `/qa`와 별도로 `VITE_OCR_TIMEOUT_SECONDS`(기본 330초)까지 기다립니다.
+- 프론트 흐름: 사진 → `text`를 "추출된 문제" 칸에 채움 → 사용자가 고침 → `POST /qa`.
+
+오류:
+| 코드 | 경우 |
+|---|---|
+| 400 | 이미지가 아니거나 PNG/JPEG/WEBP가 아님 |
+| 413 | `PROBLEM_OCR_MAX_UPLOAD_MB` 초과 |
+| 422 | `file` 없음 |
+| 503 | 대체 경로 PaddleOCR까지 실패(모델 파일 없음 등). `detail`: "사진에서 문제를 읽지 못했습니다. 문제를 직접 입력해 주세요." |

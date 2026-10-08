@@ -213,6 +213,31 @@ def test_visual_text_excludes_related_theory_context(sample):
     assert "이론 문맥" not in text and "관찰" not in text
 
 
+def test_table_text_fixed_output(sample):
+    # 기본 출력은 DB에 저장된 임베딩 텍스트와 같아야 한다(바뀌면 재임베딩) — 이론·시각자료는 위 두 테스트가 고정
+    assert embedding_text(sample["blocks"]["blocks"][3]) == (
+        "1장 가짜 장 > 가짜 표\n[표] 가짜 표\n- 행가 (A): • 값1 • 값2\n- 행나: 값3")
+
+
+def test_without_path_drops_only_title_path(sample):
+    blocks = sample["blocks"]["blocks"]
+    assert embedding_text(blocks[1], with_path=False) == "가나다 설명 문장이다."
+    for b in (blocks[3], blocks[4], blocks[5]):
+        full = embedding_text(b)
+        assert full == f"{' > '.join(b['title_path'])}\n{embedding_text(b, with_path=False)}"
+
+
+def test_block_from_row_rebuilds_same_text(settings, sample):
+    """DB 행(컬럼)만으로 원본 블록과 같은 텍스트가 나온다(검색 때 LLM용 텍스트를 다시 만들 때 사용)."""
+    from dataclasses import asdict
+
+    from app.ingestion.common_json import block_from_row
+
+    for rec in _build(settings, sample).blocks:
+        row = asdict(rec)
+        assert embedding_text(block_from_row(row)) == rec.embedding_text
+
+
 def test_model_generated_not_in_embedding_text(settings, sample):
     rec = _by_id(_build(settings, sample))["S9:THEORY:TH_1_01"]
     assert "키워드" not in rec.embedding_text and "단서" not in rec.embedding_text

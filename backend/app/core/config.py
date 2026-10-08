@@ -45,6 +45,16 @@ class Settings(BaseSettings):
     answer_model: Literal["lite", "strong"] = "lite"  # strong이 재시도 후에도 실패하면 lite로 폴백(D-010)
     # 0 고정(2026-10-01): 실행 간 흔들림을 줄여 비교 가능하게. 0이어도 완전 결정적이라는 보장은 없음(D-025)
     answer_temperature: float = Field(default=0, ge=0, le=2)
+    # 문제 사진 → 문제 텍스트(POST /ocr, D-JW-002·D-JW-003). 기본 gemini(팀 공용 GEMINI_API_KEY), google_vision은 키가 있을 때 선택. 엔진이 안 되면 PaddleOCR로 대신 읽는다.
+    problem_ocr_engine: Literal["google_vision", "gemini"] = "gemini"
+    google_vision_api_key: SecretStr = SecretStr("")
+    google_vision_language_hints: str = "ko"  # 쉼표로 여러 개(예: ko,en). 비우면 자동 감지
+    google_vision_timeout_seconds: float = Field(default=30, gt=0)
+    # gemini 엔진일 때. 프롬프트는 backend/app/prompts/problem_extract_*.txt
+    problem_extract_model: Literal["lite", "strong"] = "lite"
+    problem_extract_temperature: float = Field(default=0, ge=0, le=2)
+    # /ocr 전용 한도. Gemini 인라인 요청은 20MB까지라 base64(약 1.33배)를 생각해 12MB(MAX_UPLOAD_MB와 별개)
+    problem_ocr_max_upload_mb: int = Field(default=12, gt=0)
     # 서버 시작 시 임베딩·리랭커를 로드하고 한 번 돌려 둔다(첫 질문 지연 방지). false면 질의 API가 503(지연 로딩 안 함).
     # 테스트(conftest)에서만 false로 둔다.
     preload_models: bool = True
@@ -62,6 +72,11 @@ class Settings(BaseSettings):
     # 검색
     search_top_k: int = Field(default=5, gt=0)
     search_candidates_n: int = Field(default=10, gt=0)  # 리랭커에 넘길 벡터 후보 수(리랭커 없으면 안 씀, D-024)
+    # 검색 대상(D-M-033): team_text = theory_chunks만 / common_json = 공통 JSON 블록만 /
+    # mixed = documents(corpus='common_json')에 연결된 book은 블록, 나머지 book은 theory_chunks
+    search_corpus: Literal["team_text", "common_json", "mixed"] = "mixed"
+    # 블록 이미지 URL 틀. {key}에 thumbnail_s3_key / crop_s3_key가 들어간다. 비우면 URL을 만들지 않음(null)
+    asset_url_template: str = ""
 
     # 리랭커 (ARCHITECTURE "검색 단계 상세"). 모델 이름이 비면 리랭크 없이 벡터 순위 그대로. 캐시는 EMBEDDING_MODEL_DIR
     reranker_model: str = ""
@@ -179,6 +194,20 @@ class Settings(BaseSettings):
         if self.judge_can_answer_min > self.judge_confident_min:
             raise ValueError("JUDGE_CAN_ANSWER_MIN은 JUDGE_CONFIDENT_MIN 이하여야 합니다.")
         return self
+
+    @field_validator("asset_url_template")
+    @classmethod
+    def _check_asset_url_template(cls, v: str) -> str:
+        v = v.strip()
+        if v and "{key}" not in v:
+            raise ValueError("ASSET_URL_TEMPLATE에는 {key} 자리표시자가 있어야 합니다.")
+        return v
+
+    def asset_url(self, key: str | None) -> str | None:
+        """저장소 키 → 이미지 URL. 틀이 비었거나 키가 없으면 None."""
+        if not self.asset_url_template or not key:
+            return None
+        return self.asset_url_template.replace("{key}", key)
 
     @property
     def storage_dir(self) -> Path:
