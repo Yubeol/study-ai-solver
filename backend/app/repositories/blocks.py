@@ -66,14 +66,14 @@ INSERT INTO {a}.blocks AS t (
     title_path, concept_name, raw_text, clean_text, table_data, visual_data, image, crop_s3_key, thumbnail_s3_key,
     duplicate_of_block_id, model_generated, confidence, review, needs_review, source, search_enabled,
     search_excluded_reason, embedding_text, embedding_text_hash, embedding, embedding_model, content_hash,
-    processing_run_id)
+    processing_run_id, source_clean_text_hash)
 VALUES (
     %(document_id)s, %(block_id)s, %(source_id)s, %(block_type)s, %(block_role)s, %(printed_page_number)s,
     %(order_in_page)s, %(title)s, %(title_path)s, %(concept_name)s, %(raw_text)s, %(clean_text)s, %(table_data)s,
     %(visual_data)s, %(image)s, %(crop_s3_key)s, %(thumbnail_s3_key)s, %(duplicate_of_block_id)s,
     %(model_generated)s, %(confidence)s, %(review)s, %(needs_review)s, %(source)s, %(search_enabled)s,
     %(search_excluded_reason)s, %(embedding_text)s, %(embedding_text_hash)s, %(embedding)s::public.vector,
-    %(embedding_model)s, %(content_hash)s, %(processing_run_id)s)
+    %(embedding_model)s, %(content_hash)s, %(processing_run_id)s, %(source_clean_text_hash)s)
 ON CONFLICT (block_id) DO UPDATE SET
     document_id = EXCLUDED.document_id, source_id = EXCLUDED.source_id, block_type = EXCLUDED.block_type,
     block_role = EXCLUDED.block_role, printed_page_number = EXCLUDED.printed_page_number,
@@ -88,7 +88,8 @@ ON CONFLICT (block_id) DO UPDATE SET
     embedding_text_hash = EXCLUDED.embedding_text_hash,
     embedding = CASE WHEN %(overwrite_embedding)s THEN EXCLUDED.embedding ELSE t.embedding END,
     embedding_model = CASE WHEN %(overwrite_embedding)s THEN EXCLUDED.embedding_model ELSE t.embedding_model END,
-    content_hash = EXCLUDED.content_hash, processing_run_id = EXCLUDED.processing_run_id, updated_at = now()
+    content_hash = EXCLUDED.content_hash, processing_run_id = EXCLUDED.processing_run_id,
+    source_clean_text_hash = EXCLUDED.source_clean_text_hash, updated_at = now()
 """
 
 
@@ -128,7 +129,8 @@ def upsert_blocks(
             "search_excluded_reason": r.search_excluded_reason, "embedding_text": r.embedding_text,
             "embedding_text_hash": r.embedding_text_hash, "embedding": vec,
             "embedding_model": model if p.embed else None, "content_hash": r.content_hash,
-            "processing_run_id": run_id, "overwrite_embedding": p.embed or p.clear_embedding,
+            "processing_run_id": run_id, "source_clean_text_hash": r.source_clean_text_hash,
+            "overwrite_embedding": p.embed or p.clear_embedding,
         })
     if params:
         with conn.cursor() as cur:

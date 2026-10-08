@@ -167,13 +167,13 @@ book 객체:
 필드 메모:
 - **`evidence[].page`는 문자열**(`printed_page_number`, 예 `"217"`)입니다. 없으면 null. 프론트 타입은 `string | number | null`.
 - `answer`·`explanation`·`confusions` 안의 `[n]`은 `evidence[].n` 번호입니다. 범위 밖 번호는 서버가 지우고 `llm.citation_check`에 기록합니다.
-- `raw_text`는 교재 원문 그대로(교정 없음), 항상 문자열입니다. 표·시각자료 블록은 원문이 글자 목록이라 줄바꿈으로 이어서 줍니다. LLM에는 정리된 본문(이론은 `clean_text`, 표는 행 텍스트, 시각자료는 설명·구조·그림 속 글자)을 넘기지만 응답에서는 뺍니다.
+- `raw_text`는 교재 원문 그대로(교정 없음), 항상 문자열입니다. 표·시각자료 블록은 원문이 글자 목록이라 줄바꿈으로 이어서 줍니다. 원문이 없는 코드 블록은 `clean_code`, 수식 블록은 `plain_text`를 줍니다(D-M-034). LLM에는 정리된 본문(이론은 `clean_text`, 표는 행 텍스트, 시각자료는 설명·구조·그림 속 글자)을 넘기지만 응답에서는 뺍니다.
 - **`evidence[].chunk_id`는 `corpus`에 따라 가리키는 테이블이 다릅니다**: `corpus`가 `team_text`면 `theory_chunks.id`, `common_json`이면 `mingyu_app.blocks.id`. 두 경우 모두 UUID 문자열입니다.
 - 검색 대상 전환(D-M-033)으로 **추가된 필드**(기존 필드는 그대로):
   | 필드 | 뜻 |
   |---|---|
   | `corpus` | `team_text` / `common_json` (이 근거가 나온 곳) |
-  | `kind` | `theory` / `table` / `visual` (`team_text`는 항상 `theory`) |
+  | `kind` | `theory` / `table` / `visual` / `code` / `formula` (`team_text`는 항상 `theory`, 코드·수식은 3과목 블록, D-M-034) |
   | `block_id` | 공통 JSON 블록 ID(예 `S2:TABLE:TAB_79_01`), `team_text`면 null |
   | `title`, `title_path` | 근거 제목, 제목 경로 목록(`path`는 이것을 ` > `로 이은 문자열) |
   | `document_title` | 공통 JSON 문서 제목(`team_text`면 책 제목) |
