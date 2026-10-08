@@ -8,7 +8,117 @@ import {
   getBlock,
   type BlockDetail,
   type Evidence,
+  type RelatedVisual,
 } from '../api'
+
+type EvidenceImageProps = {
+  title: string
+  thumbnailUrl?: string | null
+  imageUrl?: string | null
+}
+
+function EvidenceImage({
+  title,
+  thumbnailUrl,
+  imageUrl,
+}: EvidenceImageProps) {
+  const [
+    imageError,
+    setImageError,
+  ] = useState(false)
+
+  const previewUrl =
+    thumbnailUrl ||
+    imageUrl
+
+  const originalUrl =
+    imageUrl ||
+    thumbnailUrl
+
+  if (!previewUrl) {
+    return null
+  }
+
+  if (imageError) {
+    return (
+      <div className="evidence-image-error">
+        이미지를 불러올 수 없어요.
+      </div>
+    )
+  }
+
+  const openOriginal =
+    () => {
+      if (!originalUrl) {
+        return
+      }
+
+      window.open(
+        originalUrl,
+        '_blank',
+        'noopener,noreferrer',
+      )
+    }
+
+  return (
+    <button
+      type="button"
+      className="evidence-image-button"
+      onClick={
+        openOriginal
+      }
+      aria-label={`${title} 원본 이미지 열기`}
+    >
+      <img
+        src={previewUrl}
+        alt={title}
+        className="evidence-image"
+        onError={() =>
+          setImageError(
+            true,
+          )
+        }
+      />
+    </button>
+  )
+}
+
+function RelatedVisualCard({
+  visual,
+}: {
+  visual: RelatedVisual
+}) {
+  const title =
+    visual.title ||
+    '관련 이미지'
+
+  return (
+    <div className="related-visual-card">
+      <EvidenceImage
+        title={title}
+        thumbnailUrl={
+          visual.thumbnail_url
+        }
+        imageUrl={
+          visual.image_url
+        }
+      />
+
+      <div className="related-visual-info">
+        <span className="related-visual-kind">
+          {visual.kind ===
+          'table'
+            ? '표'
+            : '그림'}
+        </span>
+
+        <span className="related-visual-title">
+          {title}
+        </span>
+      </div>
+    </div>
+  )
+}
 
 function EvidenceCard({
   e,
@@ -65,6 +175,16 @@ function EvidenceCard({
       e.block_id,
     )
 
+  const hasOwnImage =
+    Boolean(
+      e.thumbnail_url ||
+      e.image_url,
+    )
+
+  const relatedVisuals =
+    e.related_visuals ??
+    []
+
   const openEditor =
     async () => {
       if (
@@ -103,10 +223,6 @@ function EvidenceCard({
             e.block_id,
           )
 
-        /*
-         * 예상하지 못한 null 응답이 와도
-         * 화면 전체가 죽지 않도록 방어.
-         */
         if (
           !currentBlock
         ) {
@@ -142,7 +258,8 @@ function EvidenceCard({
         )
       } catch (error) {
         setCorrectionError(
-          error instanceof Error
+          error instanceof
+            Error
             ? error.message
             : '현재 이론 내용을 불러오지 못했습니다.',
         )
@@ -165,9 +282,7 @@ function EvidenceCard({
       const nextText =
         newCleanText.trim()
 
-      if (
-        !nextText
-      ) {
+      if (!nextText) {
         setCorrectionError(
           '수정할 내용을 입력해주세요.',
         )
@@ -241,7 +356,8 @@ function EvidenceCard({
         )
       } catch (error) {
         setCorrectionError(
-          error instanceof Error
+          error instanceof
+            Error
             ? error.message
             : '이론 수정에 실패했습니다.',
         )
@@ -305,6 +421,52 @@ function EvidenceCard({
         {e.raw_text}
       </pre>
 
+      {hasOwnImage && (
+        <div className="evidence-visual-section">
+          <div className="evidence-visual-label">
+            근거 이미지
+          </div>
+
+          <EvidenceImage
+            title={
+              e.path ||
+              e.book_title ||
+              '근거 이미지'
+            }
+            thumbnailUrl={
+              e.thumbnail_url
+            }
+            imageUrl={
+              e.image_url
+            }
+          />
+        </div>
+      )}
+
+      {relatedVisuals.length >
+        0 && (
+        <div className="related-visuals-section">
+          <div className="evidence-visual-label">
+            관련 그림·표
+          </div>
+
+          <div className="related-visuals-list">
+            {relatedVisuals.map(
+              (visual) => (
+                <RelatedVisualCard
+                  key={
+                    visual.block_id
+                  }
+                  visual={
+                    visual
+                  }
+                />
+              ),
+            )}
+          </div>
+        </div>
+      )}
+
       {correctionError && (
         <div className="theory-correction-message error">
           {
@@ -331,8 +493,9 @@ function EvidenceCard({
                 </strong>
 
                 <p>
-                  현재 정제된 이론 내용을
-                  수정할 수 있습니다.
+                  현재 정제된 이론
+                  내용을 수정할 수
+                  있습니다.
                 </p>
               </div>
             </div>
@@ -377,7 +540,9 @@ function EvidenceCard({
                   event,
                 ) => {
                   setNewCleanText(
-                    event.target.value,
+                    event
+                      .target
+                      .value,
                   )
 
                   setCorrectionError(
@@ -473,7 +638,8 @@ export default function CitationList({
       {cited.length ===
         0 && (
         <p className="hint">
-          답변이 인용한 근거가 없습니다.
+          답변이 인용한
+          근거가 없습니다.
         </p>
       )}
 
