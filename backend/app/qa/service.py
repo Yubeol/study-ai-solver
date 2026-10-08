@@ -13,6 +13,8 @@
 - 인용 검증: cited와 본문의 [n] 중 넘긴 근거 번호(1..K) 밖인 것은 제거하고 metadata에 기록.
 - 모델(임베딩·리랭커·LLM)은 서버 시작 시 load_qa_models로 미리 올린다(지연 로딩 안 함).
 - 근거가 정해진 뒤 후처리로 이론 블록 근거에 연결된 그림·표 이미지(related_visuals)를 붙인다(D-JW-008, LLM 입력에는 안 넣음).
+- 사용자 보충(D-M-035): search_candidates가 검색 대상과 상관없이 보충도 후보로 합친다. 보충 근거는 kind·corpus가
+  supplement, 쪽 번호 없음(LLM 입력에는 "-"), clean_text·raw_text = 사용자가 입력한 본문.
 """
 
 import logging
@@ -23,6 +25,7 @@ from dataclasses import dataclass
 import psycopg
 
 from app.core.config import Settings
+from app.ingestion.common_json import CORPUS as COMMON_JSON
 from app.ingestion.embedding import LocalEmbedder, get_embedder, to_pgvector
 from app.judge import Judge, JudgeResult, get_judge
 from app.llm.gemini import GeminiClient, GeminiError
@@ -31,7 +34,7 @@ from app.qa.mcq_check import check_mcq
 from app.qa.related_visuals import add_related_visuals
 from app.repositories.query_logs import insert_query_log
 from app.retrieval.rerank import LocalReranker, get_reranker, rerank
-from app.retrieval.search import TEAM_TEXT, candidate_sources, is_answerable, search_candidates
+from app.retrieval.search import SUPPLEMENT, TEAM_TEXT, candidate_sources, is_answerable, search_candidates
 
 log = logging.getLogger(__name__)
 
@@ -105,7 +108,7 @@ def build_evidence(rows: list[dict]) -> list[dict]:
 
 def evidence_prompt(evidence: list[dict]) -> str:
     return "\n".join(
-        render("answer_evidence_item.txt", n=e["n"], book=e["book_title"], page=e["page"], path=e["path"] or "-",
+        render("answer_evidence_item.txt", n=e["n"], book=e["book_title"], page=e["page"] or "-", path=e["path"] or "-",
                text=e["clean_text"].strip())
         for e in evidence
     )
@@ -316,7 +319,7 @@ def _log(conn: psycopg.Connection, settings: Settings, r: dict) -> str | None:
     """query_logs 1행. 기록 실패는 답변을 막지 않는다(경고만).
 
     retrieved_theory_ids(팀 규격 컬럼)에는 theory_chunks id만 넣는다. 블록 근거는 metadata.retrieved_block_ids와
-    evidence[].block_id에 둔다(D-M-033).
+    evidence[].block_id에(D-M-033), 사용자 보충 근거는 metadata.retrieved_supplement_ids에 둔다(D-M-035).
     """
     llm = r.get("llm") or {}
     answer = "\n\n".join(x for x in (r["answer"], r.get("explanation"), r.get("confusions")) if x)
@@ -324,7 +327,8 @@ def _log(conn: psycopg.Connection, settings: Settings, r: dict) -> str | None:
         "flow": "qa_v1",
         "corpus": r["corpus"],
         "candidate_sources": r["candidate_sources"],
-        "retrieved_block_ids": [e["block_id"] for e in r["evidence"] if e["corpus"] != TEAM_TEXT],
+        "retrieved_block_ids": [e["block_id"] for e in r["evidence"] if e["corpus"] == COMMON_JSON],
+        "retrieved_supplement_ids": [e["chunk_id"] for e in r["evidence"] if e["corpus"] == SUPPLEMENT],
         "status": r["status"],
         "zone": r["zone"],
         "zone_reason": r["zone_reason"],
