@@ -475,7 +475,7 @@ def report_markdown(results: list[dict], grades: dict, summary: dict, baseline: 
 
 def _kind_mark(e: dict) -> str:
     """근거가 표·시각자료 블록이면 종류 표시."""
-    return {"table": " 표", "visual": " 그림"}.get(e.get("kind") or "", "")
+    return {"table": " 표", "visual": " 그림", "code": " 코드", "formula": " 수식"}.get(e.get("kind") or "", "")
 
 
 def main(argv: list[str] | None = None) -> int:

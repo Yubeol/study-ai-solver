@@ -438,3 +438,83 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 프론트 대기 시간: `VITE_OCR_TIMEOUT_SECONDS`(기본 330초)를 /qa와 따로 둔다. 서버 최악 경로 = Gemini 4번 시도(60초×4 + 대기 2+4+8초, `GEMINI_MAX_RETRIES`=3) + PaddleOCR 첫 로드(약 60초) ≈ 314초. `PROBLEM_EXTRACT_MODEL=strong`이면 strong→lite 폴백까지 시도해 약 2배로 늘어난다.
   - 남은 것: /ocr 전용 재시도 횟수(`PROBLEM_OCR_MAX_RETRIES`)는 다음 PR. 화면(QuestionForm)의 OCR 중 입력 막기·기존 입력 보호는 수지 담당.
 - 확인 2026-10-06: 요청·응답 형식 https://docs.cloud.google.com/vision/docs/ocr , 인증("API key or OAuth token") https://docs.cloud.google.com/vision/docs/request , 가격(기능별 월 1,000단위 무료, 이후 1,000단위당 $1.50, **무료 구간도 결제 계정 필요**) https://cloud.google.com/vision/pricing .
+
+## D-JW-007 오류 신고 처리 기록과 이론 블록 수정안(block_corrections) — 005 마이그레이션 (2026-10-07)
+- 배경: 강사 요구 "틀린 이론 수정". 오류 신고(D-JW-004)를 받기만 하고 처리 결과와 교재 원문 수정 경로가 없었다. 검색 대상이 공통 JSON 블록(`mingyu_app.blocks`, D-M-032)으로 옮겨 가므로 수정 대상도 blocks로 하고, 재적재해도 안 바뀌는 `block_id`로 가리킨다(민규 협의).
+- 범위(1차): 이론 블록(`block_type = theory`)의 `clean_text`만. `raw_text`·표·시각자료는 고치지 않는다(표·시각자료는 `table_data`·`visual_data`에 내용이 있어 clean_text 수정으로 못 고침 → 데이터 담당 JSON 수정 요청 `source_fix_requested`로 닫음).
+- 005 변경(`mingyu_app`만, 팀 규격 테이블 변경 없음):
+  - `blocks.source_clean_text_hash`: JSON 원문 clean_text 해시. 005에서 SQL로 채움(지금은 적용된 수정이 없어 DB clean_text = JSON 원문). clean_text가 NULL이면 NULL.
+  - 해시 규칙(기준 함수 `app/core/text_hash.py` `clean_text_hash`): CRLF·CR → LF → 앞뒤 스페이스·탭·LF만 제거 → UTF-8 sha256 hex. Python `strip()`은 모든 유니코드 공백을, PostgreSQL `btrim()`은 기본으로 스페이스만 지워서 지울 문자를 `" \t\n"`으로 명시했다. SQL 식과 Python 값이 같은지, 백필 값이 맞는지 `tests/test_text_hash.py`로 묶었다.
+  - `answer_reports`: `resolution`(block_corrected / supplement_added / source_fix_requested / prompt_issue / retrieval_issue / not_an_error / duplicate / other), `resolution_note`(500자), `linked_block_ids`(team_text 근거 신고를 대응 block_id에 연결), `reviewed_by`(100자). `status`는 open/resolved 그대로, resolved면 resolution 필수.
+  - `block_corrections`: block_id(FK 없음 — 블록이 JSON에서 빠져도 적재를 막지 않게), report_id(FK, SET NULL), base_clean_text(작성 당시 DB clean_text, 비교 화면용), base_clean_text_hash(작성 당시 `source_clean_text_hash` 복사 — DB clean_text 해시가 아님), new_clean_text(1~2,000자, 공백만 거부), reason, status, review_note, reviewed_by, applied_note, created_at·reviewed_at·applied_at. 블록당 approved/applied는 1개(부분 유니크).
+  - 길이 한도 근거(2026-10-07 조회, 2026-10-08 민규 확인): 1·2과목 이론 311개(1과목 138 / 2과목 173) 기준 clean_text 최대 694자(1과목, 2과목 최대 664자), 99% 586자. 1.5배(1,041자)에 3과목 적재 여유를 두어 2,000자.
+- 흐름(마감 축소판, 민규 요청): 승인하면 API가 바로 블록 clean_text를 고치고 재임베딩한다(`common_json.embedding_text` 그대로).
+  - 승인 시 API는 `clean_text`·`embedding`만 고치고 `blocks.source_clean_text_hash`는 바꾸지 않는다(JSON 원문 기준 해시로 유지, 재적재 때 원문이 바뀌었는지 비교하는 기준).
+  - proposed → (승인) applied / (반려) rejected / (철회) withdrawn
+  - applied → 같은 블록의 새 수정 적용 시 superseded(같은 트랜잭션에서 먼저 처리)
+  - approved·stale은 적재 코드가 승인된 수정을 다시 적용하는 후속 단계용으로 CHECK에만 둔다.
+- 알려진 한계:
+  - 적재 코드(common_json_load)가 JSON 원문으로 upsert하므로, 재적재하면 적용된 수정이 덮어써진다. 수정 기록(block_corrections)은 남으므로 후속 단계에서 적재 코드가 applied 수정을 다시 적용하고, 원문 해시가 다르면 stale로 바꾼다.
+  - 승인 API에 인증이 없다(내부용). reviewed_by는 직접 입력한 이름이라 검증되지 않는다.
+  - 길이 한도 2,000자는 1·2과목 기준. 3과목 적재 후 최대 길이가 1,300자를 넘으면 마이그레이션으로 다시 정한다.
+- 역할: 005·API는 재원, 적용(DB)은 민규. API는 PR #10(evidence에 block_id) 머지 후.
+- 구현(API, `feat/block-corrections-api`, 2026-10-08):
+  - `GET /blocks/{block_id}`(수정 화면용 지금 본문·editable), `POST /block-corrections`(proposed), `GET /block-corrections`, `POST /block-corrections/{id}/approve|reject|withdraw`, `PATCH /answer-reports/{id}`에 처리 칸.
+  - 승인: 임베딩은 트랜잭션 밖에서 먼저 계산(서버에 올라와 있는 임베딩 모델, `common_json.embedding_text(block_from_row(행), with_path=True)` — 리랭커가 embedding_text 칸을 읽으므로 clean_text·embedding과 같이 바꿈) → 트랜잭션 안에서 수정안·블록 행을 잠그고 원문 해시 재확인(다르거나 블록이 없으면 stale + 409) → 이전 approved/applied superseded → blocks의 clean_text·embedding_text·embedding_text_hash·embedding·embedding_model·updated_at 갱신 → applied. report_id가 있으면 신고 resolved(block_corrected).
+  - 바꾸지 않는 칸: `source_clean_text_hash`·`content_hash`·`raw_text`(JSON 원문 기준, 민규 요청).
+  - 신고 PATCH: resolved로 바꿀 때 resolution 필수(DB CHECK 위반 → 422). 기존 `{"status": "resolved"}`만 보내는 요청은 이제 422.
+  - 입력: new_clean_text가 공백·탭·줄바꿈뿐이면 400(민규 요청), 2,000자 초과는 422. 대상은 이론 블록만(표·그림 400).
+
+## D-JW-008 /qa 근거에 연결된 그림·표 이미지(related_visuals)를 붙인다 (2026-10-08)
+- 배경: 완성선 "사진 문제 풀이(근거 + 그림·표 이미지)". 근거가 그림·표 블록이면 `thumbnail_url`·`image_url`이 이미 있지만(D-M-033), 근거가 이론이면 교재에서 그 이론과 함께 보는 그림·표가 화면에 안 나온다. 공통 JSON `block_relations`(D-M-032)에 이론 ↔ 그림·표 관계와 신뢰도가 있다. (D-JW-005의 공통 JSON 파일 직접 읽기·쪽 단위 방식은 쓰지 않고 DB·block_id 기준으로 다시 만들었다.)
+- 결정(민규 요청 사양):
+  - 최종 근거 K개가 정해진 뒤 후처리. `kind = theory`이고 `block_id`가 있는 근거마다 `mingyu_app.block_relations`에서 연결된 visual·table 블록을 찾는다. link_type `THEORY_TO_VISUAL` / `THEORY_TO_TABLE` / `VISUAL_TO_THEORY` / `TABLE_TO_THEORY`, 방향은 양쪽(from·to) 다 본다.
+  - 신뢰도 ≥ `RELATED_VISUAL_MIN_CONFIDENCE`(0.7), 근거당 최대 `RELATED_VISUAL_MAX`(3)개(신뢰도 높은 순, 같으면 block_id 순). 이미 evidence에 있는 블록, 이미지 키가 없거나 `ASSET_URL_TEMPLATE`이 비어 주소를 못 만드는 블록은 뺀다.
+  - `evidence[].related_visuals = [{block_id, kind, title, thumbnail_url, image_url}]`, 없으면 `[]`. URL은 `settings.asset_url(key)`(썸네일 없으면 원본, 원본 없으면 썸네일로 채움).
+  - DB 조회는 근거 K개의 block_id를 한 번에(쿼리 1번, `app/repositories/related_visuals.py`). 기존 응답 필드는 그대로 두고 추가만.
+  - `query_logs.metadata.evidence[].related_visual_ids`에 붙인 block_id를 남긴다. `timings_ms.visuals_ms` 추가.
+  - LLM 입력(근거 텍스트)에는 넣지 않는다(화면 표시용). 조회가 실패해도 답변은 막지 않고 경고 로그 + `[]`.
+- 한계: 관계는 공통 JSON이 있는 과목만(team_text 근거는 항상 `[]`). 3과목 적재 후 3과목 이미지도 같이 붙는다. `ASSET_URL_TEMPLATE` 값은 민규가 3과목 적재 때 확인해 알려 주기로 함.
+
+## D-M-034 3과목 공통 JSON 적재: 코드·수식 임베딩 규칙, 이미지 키 이름 대체, 표 형식 맞추기, 원문 해시 채우기 (2026-10-08, `feat/subject3-load`)
+- 배경: 수민님 3과목 최종본(`data/common_json/subject3/`, format `1.0-subject3-final-v8h`, 블록 719 · 관계 240 · 쪽 관계 97 · 쪽 210)을 1·2과목과 같은 방식(D-M-032)으로 적재해 mixed(D-M-033)에서 3과목도 블록으로 검색되게 한다. 검색 기준값·리랭커·프롬프트는 바꾸지 않는다.
+- 조사: DDL 불필요. `blocks.block_type` CHECK(004)에 이미 `formula`·`code`가 있고, `block_relations`는 blocks에 FK(ON DELETE CASCADE). 로더는 과목 폴더의 `*_blocks.json`·`*_relations.json`·`*_manifest.json`·`*_validation_report.json`을 찾으므로 3과목 파일명 그대로 읽힌다(`documented_exceptions`·README는 읽지 않음).
+- 데이터 담당 확인 사항(수민님): `original_s3_key`는 크롭 이미지 키(1·2과목에서 말한 crop_s3_key와 같은 뜻), 이미지 URL은 `https://adsp-rag-images-2026-ksm.s3.ap-northeast-2.amazonaws.com/{key}`. 수식 68개는 이미지 키가 없는 게 정상. CODE_160_02는 clean_code가 비고 실행 결과만 있는 게 정상. 블록 없는 13쪽은 의도적 제외. 수식 plain_text가 LaTeX 그대로인 것은 그대로 쓴다.
+- 결정:
+  - **코드 임베딩 텍스트** = 제목 경로 + `[코드] 제목` + clean_code + (실행 결과가 있으면) `실행 결과:` 줄 + execution_output. **수식** = 제목 경로 + `[수식] 제목` + plain_text(없으면 latex). `with_path=False`는 다른 종류와 같이 맨 앞 제목 경로만 뺀다. 코드·수식 전용 필드(clean_code·execution_output·raw_code·language·output_type, plain_text·latex 등)는 새 컬럼 없이 `blocks.source`에 남고 `block_from_row`가 거기서 읽는다(검색 SQL에 `b.source` 추가).
+  - **이미지 키 이름 대체**: 실제로는 1~3과목 파일 모두 `image.original_s3_key`를 쓴다(기존 코드도 이 칸을 `blocks.crop_s3_key`에 넣고 있었음). `image.crop_s3_key`가 있으면 그것을, 없으면 `original_s3_key`를 쓴다(`CROP_KEYS`). 수식은 image가 null이어도 된다.
+  - **표 형식 맞추기**(`normalize_table`, 검증·임베딩 때만, `table_data`는 원본 그대로 저장): TAB_302_01·TAB_312_01은 `rows`가 `{머리: 값}` 객체 목록 → 머리(처음 나온 순서)를 headers로, 값을 칸으로. TAB_322_01은 `merged_cells`가 `col_index` 하나 → start_col = end_col = col_index. 기존 형태(1·2과목)는 결과가 같다.
+  - **원문 해시 채우기**: 적재 upsert가 `source_clean_text_hash = clean_text_hash(clean_text)`를 채운다(clean_text 없으면 NULL, 005 백필과 같은 규칙). 바뀌지 않은 블록은 upsert하지 않으므로 이미 적재된 1·2과목 값은 그대로다. 3과목은 515개(이론 440 전부 + clean_text가 있는 수식 68 · 표 7). 이론 수정 API는 이론만 받으므로(D-JW-007) 수식·표 해시는 쓰이지 않는다.
+  - 검색 제외 규칙은 1·2과목과 같다: 학습목표 12, 표 중복 이론 31 → 검색 대상 676(이론 397 · 시각자료 91 · 코드 60 · 표 60 · 수식 68).
+  - /qa evidence의 `kind`에 `code`·`formula`가 나온다(블록 행 그대로). 근거 원문(raw_text)이 비면 코드는 clean_code, 수식은 plain_text를 보여 준다(`block_display_text`, 신고 스냅샷도 같음). 평가 비교표의 1위 근거 종류에도 code·formula 칸 추가.
+- 확인:
+  - 적재 전 새 코드로 1·2과목 390블록을 다시 계산 → dry-run 모두 "같음", crop 키·원문 해시·임베딩 텍스트 해시가 DB와 다른 블록 0.
+  - 임베딩 텍스트 bge-m3 토큰 최대 899(TAB_237_01) → `EMBEDDING_MAX_SEQ_LENGTH` 1024 안. 676블록 임베딩 약 215초.
+  - 적재 후 blocks 1109(390 + 719), 3과목 관계 240, 3과목 document ↔ 3과목 book 연결, 검색 뷰 1018, 1·2과목 블록·관계 digest 적재 전과 같음, block_corrections 2행 그대로.
+- 3과목 검색 평가(2026-10-08, `evaluate --corpus team_text,common_json --subjects subject3`, 리랭커 v2-m3 N=10 K=5, Gemini 0회, `data/reports/eval/20261008-191620-*`):
+
+  | 검색 대상 | 답 가능 n | hit@1 | hit@3 | hit@5 | MRR | 자료 없음 reject/gray/answer | 답 가능 reject/gray/answer |
+  |---|---|---|---|---|---|---|---|
+  | team_text | 10 | 9/10 | 10/10 | 10/10 | 0.933 | 6/1/0 | 0/2/8 |
+  | common_json | 10 | 9/10 | 10/10 | 10/10 | 0.950 | 6/0/1 | 0/1/9 |
+
+  1위 근거 종류(common_json): 답 가능 이론 7 · 표 3, 자료 없음 이론 5 · 표 1 · 그림 1. 코드·수식이 1위인 질문은 없음(33문항에 코드 질문이 없음).
+- **알려진 위험 n08**(자료 없음 경계 사례 "Mean Shift 군집…"): 리랭커 1위 `S3:THEORY:TH_337_01`(DBSCAN 장·단점) 0.463으로 상한 0.15를 넘어 **answer 구간** 진입(team_text는 0.131로 gray). 처음 평가에서 "자료 없음 answer가 늘지 않을 것" 기준에 걸려 3과목 블록을 지웠다가, 다른 지표가 모두 좋아졌고 경계 사례 1문항이라 LLM 판단을 확인하고 다시 적재했다(사용자 결정). /qa 1회(Gemini 1회, query_log `25fddb34…`): zone answer, **status unanswerable, llm_unanswerable=true**, 답 "자료에서 확인 불가 — 근거에는 K-평균·DBSCAN·혼합분포·타당성 지표는 있으나 Mean Shift가 군집을 찾는 방법은 없다". 마지막 안전장치(LLM 판단)가 막았지만 3구간 단계에서는 거르지 못한다.
+- 마감 후 할 일: 리랭커 상한 `ANSWERABLE_CONFIDENT_RERANK_SCORE` 0.15(하한 0.03)는 1·2과목 중심 33문항 기준 잠정값 → 3과목 블록 기준으로 재조정(경계 사례 추가). D-JW-007 길이 한도: 3과목 이론 clean_text 최대 1,563자(중앙값 178자)로 "1,300자 초과 시 재검토" 조건에 해당(현재 한도 2,000자 안이라 동작에는 문제 없음).
+
+## D-M-035 텍스트 보충 이론은 등록 즉시 임베딩해 검색 후보에 합친다(rejected만 제외) — 006 마이그레이션 (2026-10-08, `feat/supplement-search`)
+- 배경: 강사님 요구 "자료에 이론이 없어 답을 못 하면 사용자가 이론을 입력해 적재·임베딩 후 답 생성". 지금까지 보충(D-JW-004)은 `mingyu_app.supplements`에 `pending_review`로 저장만 되고 임베딩하지 않아 검색에 걸리지 않았다. 마감일이라 최소 범위로 하고, 검색 기준값·리랭커·프롬프트는 바꾸지 않는다.
+- 조사(2026-10-08): supplements 18칸에 임베딩 칸 없음, 행 0. ARCHITECTURE 처음 설계(보충 book·page + `material_type=user_supplement`)는 팀 규격 데이터 수정이라 D-JW-004에서 택하지 않았다. 프론트 보충 Drawer(`createSupplement`)는 `source`·`query_log_id`·`title`·`text`·`file`을 보내고 `subject`는 보내지 않는다. /qa에는 과목 필터가 없다(`book_ids`는 평가 `--subjects`용).
+- 결정:
+  - **006 마이그레이션**(`006_mingyu_supplement_embedding.sql`, 2026-10-08 민규 적용): supplements에 `embedding_text text`, `embedding vector(1024)`, `embedding_model text` 추가 + 부분 HNSW 인덱스(`status <> 'rejected' AND embedding IS NOT NULL`). 기존 칸은 그대로.
+  - **등록**: 텍스트 보충만 `"제목\n\n본문"`(제목이 없으면 본문만)을 서버에 올라온 임베더(`app.state.qa_models.embedder`, /qa와 같은 `EMBEDDING_MODEL`·정규화)로 임베딩해 같은 INSERT 한 문장으로 저장한다. 모델이 로드되지 않았으면 503(빈 텍스트 400이 먼저). 400 메시지는 기존 문구 그대로. 응답에 `embedding_model`·`searchable` 추가.
+  - **검색 대상 상태**: 승인 화면이 없으므로 **`rejected`를 뺀 전부**(`pending_review`·`approved`)가 등록 즉시 검색 대상이다. 상태값은 `pending_review` 그대로 저장한다(나중에 승인 화면을 만들면 조건만 바꾸면 됨).
+  - **합치기**: `search_candidates`가 `SEARCH_CORPUS`와 상관없이 보충 N개를 가져와 기존 후보와 cosine 점수로 합쳐 상위 N개 → 리랭커(같은 점수면 교재 먼저). book 범위(`book_ids`)를 주면 보충은 넣지 않는다(어느 book에도 속하지 않고, 화면은 과목을 보내지 않아 같은 과목인지 알 수 없음).
+  - **근거 표시**: `kind`·`corpus` = `supplement`, `block_id` = null, `book_title`·`document_title` = "사용자 보충", `page` = null(LLM 입력은 `-`), `title`·`path` = 제목, `raw_text` = 본문, `related_visuals` = `[]`. Gemini·판정기에는 본문을 `clean_text` 자리로 넘긴다. 기존 응답 필드는 그대로.
+  - **기록**: `query_logs.metadata.retrieved_supplement_ids`(supplements.id) 추가, `candidate_sources`에 `supplement` 개수(후보에 있을 때). `retrieved_block_ids`는 이제 `corpus=common_json`인 근거만 모은다(보충의 null이 섞이지 않게).
+- 알려진 한계:
+  - **파일만 올린 보충(이미지·PDF)은 임베딩하지 않고 저장만 한다 → 검색에 걸리지 않는다.** 사진 이론 OCR 텍스트화는 다음 개선.
+  - **인증이 없다**: 누구나 등록할 수 있고 등록 즉시 모든 사용자의 검색 후보가 된다. 잘못된 보충은 지금 DB에서 `status='rejected'`로 바꿔야 빠진다(관리 화면 없음).
+  - 긴 본문은 청크로 나누지 않고 한 덩어리로 임베딩한다(`EMBEDDING_MAX_SEQ_LENGTH` 뒤는 잘림).
+  - `EMBEDDING_MODEL`을 바꾸면 보충도 다시 임베딩해야 한다(`embedding_model` 칸으로 구분 가능, 재임베딩 스크립트는 없음).
+  - 신고 스냅샷(D-JW-004)은 보충 근거를 DB에서 조회하지 않고 화면이 보낸 `evidence` 값으로 채운다.

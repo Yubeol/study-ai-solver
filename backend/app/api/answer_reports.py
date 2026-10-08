@@ -26,6 +26,9 @@ ReportType = Literal[
     "wrong_answer", "wrong_explanation", "wrong_concept", "missing_concept", "wrong_ocr", "insufficient", "other"
 ]
 ReportStatus = Literal["open", "resolved"]
+# 처리 결과(005, D-JW-007). source_fix_requested = 표·시각자료 오류를 데이터 담당 JSON 수정 요청으로 닫음
+Resolution = Literal["block_corrected", "supplement_added", "source_fix_requested", "prompt_issue",
+                     "retrieval_issue", "not_an_error", "duplicate", "other"]
 
 
 class EvidenceIn(BaseModel):
@@ -57,8 +60,14 @@ class ReportCreate(BaseModel):
     evidence: list[EvidenceIn] = Field(default=[], max_length=20)
 
 
-class ReportStatusUpdate(BaseModel):
-    status: ReportStatus
+class ReportUpdate(BaseModel):
+    """빠진 값은 그대로 둔다. resolved로 바꿀 때는 resolution이 필요하다(이미 있으면 생략 가능)."""
+
+    status: ReportStatus | None = None
+    resolution: Resolution | None = None
+    resolution_note: str | None = Field(default=None, max_length=500)
+    linked_block_ids: list[Annotated[str, Field(min_length=1, max_length=100)]] | None = Field(default=None, max_length=20)
+    reviewed_by: str | None = Field(default=None, max_length=100)
 
 
 _SNAPSHOT_KEYS = ("n", "chunk_id", "book_title", "page", "path", "raw_text", "vector_score", "rerank_score", "cited",
@@ -138,9 +147,17 @@ def list_reports(
 
 
 @router.patch("/answer-reports/{report_id}")
-def update_report_status(report_id: UUID, body: ReportStatusUpdate, conn: Conn, settings: SettingsDep) -> dict:
-    """신고 하나의 처리 상태만 바꾼다(open ↔ resolved)."""
-    row = reports_repo.set_status(conn, settings, report_id, body.status)
+def update_report(report_id: UUID, body: ReportUpdate, conn: Conn, settings: SettingsDep) -> dict:
+    """신고 처리: 상태(open ↔ resolved)·처리 결과·메모·연결 블록·검토자. resolved면 resolution 필수."""
+    if not body.model_fields_set:
+        raise HTTPException(422, "바꿀 값이 없습니다.")
+    try:
+        row = reports_repo.update_review(
+            conn, settings, report_id, status=body.status, resolution=body.resolution,
+            resolution_note=body.resolution_note.strip() if body.resolution_note is not None else None,
+            linked_block_ids=body.linked_block_ids, reviewed_by=body.reviewed_by)
+    except psycopg.errors.CheckViolation as e:
+        raise HTTPException(422, "resolved로 바꾸려면 resolution(처리 결과)이 필요합니다.") from e
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "신고를 찾을 수 없습니다.")
     return row
