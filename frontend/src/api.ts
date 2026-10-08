@@ -105,10 +105,23 @@ export type AnswerReportType =
   | 'insufficient'
   | 'other'
 
+export type ConceptDetail =
+  | 'unrelated_concept'
+  | 'wrong_location'
+  | 'explanation_mismatch'
+  | 'other'
+
 export type CreateAnswerReportRequest = {
   query_log_id: string | null
 
   report_type: AnswerReportType
+
+  /*
+   * wrong_concept일 때만 값이 들어간다.
+   *
+   * 그 외 신고 유형은 []
+   */
+  concept_details: ConceptDetail[]
 
   detail?: string
 

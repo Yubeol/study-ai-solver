@@ -1469,3 +1469,80 @@ a.cite {
 
   font-size: 11px;
 }
+
+/* =========================
+   CONCEPT DETAILS
+========================= */
+
+.concept-detail-section {
+  margin-top: 20px;
+  padding: 14px;
+
+  border: 1px solid var(--border);
+  border-radius: 9px;
+
+  background: #fafbfc;
+}
+
+.concept-detail-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  gap: 10px;
+
+  margin-bottom: 10px;
+}
+
+.concept-detail-heading strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.concept-detail-heading span {
+  color: var(--muted);
+
+  font-size: 10px;
+}
+
+.concept-detail-list {
+  display: flex;
+  flex-direction: column;
+
+  gap: 7px;
+}
+
+.concept-detail-card {
+  display: flex;
+  align-items: center;
+
+  gap: 9px;
+
+  padding: 10px 11px;
+
+  border: 1px solid #e0e3e8;
+  border-radius: 7px;
+
+  background: #ffffff;
+
+  color: var(--text-soft);
+  font-size: 12px;
+
+  cursor: pointer;
+}
+
+.concept-detail-card:hover {
+  background: #f7f9fb;
+}
+
+.concept-detail-card.selected {
+  border-color: #9bb4d3;
+
+  background: #f2f7fd;
+
+  color: var(--accent-text);
+}
+
+.concept-detail-card input {
+  margin: 0;
+}

@@ -214,11 +214,17 @@ def test_report_create_list_resolve(tables, tmp_path):
         assert ids.index(second["id"]) < ids.index(first["id"])  # 최신순, 같은 답변이어도 행이 따로 쌓임
 
         r = client.patch(f"/answer-reports/{first['id']}", json={"status": "resolved"})
+        assert r.status_code == 422  # resolved는 처리 결과(resolution) 필수(005)
+        r = client.patch(f"/answer-reports/{first['id']}",
+                         json={"status": "resolved", "resolution": "not_an_error", "resolution_note": " 확인함 ",
+                               "linked_block_ids": ["S1:THEORY:TH_62_02"], "reviewed_by": "pytest"})
         assert r.json()["status"] == "resolved" and r.json()["resolved_at"] is not None
+        assert (r.json()["resolution"], r.json()["resolution_note"], r.json()["linked_block_ids"]) == (
+            "not_an_error", "확인함", ["S1:THEORY:TH_62_02"])
         open_ids = [x["id"] for x in client.get("/answer-reports", params={"status": "open", "limit": 200}).json()]
         assert first["id"] not in open_ids  # 처리 완료한 신고만 목록에서 빠짐
         assert client.patch(f"/answer-reports/{first['id']}", json={"status": "open"}).json()["resolved_at"] is None
-        assert client.patch(f"/answer-reports/{uuid4()}", json={"status": "resolved"}).status_code == 404
+        assert client.patch(f"/answer-reports/{uuid4()}", json={"status": "resolved", "resolution": "other"}).status_code == 404
 
         r = client.post("/answer-reports", json=REPORT | {"query_log_id": str(uuid4())})
         assert r.status_code == 422 and "query_log_id" in r.json()["detail"]
