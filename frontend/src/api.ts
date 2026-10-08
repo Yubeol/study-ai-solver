@@ -18,6 +18,7 @@ export type Evidence = {
    */
   kind?: 'theory' | 'table' | 'visual' | 'code' | 'formula' | string | null
   corpus?: string | null
+
   block_id?: string | null
 }
 
@@ -27,10 +28,12 @@ export type JudgeInfo = {
   probability: number | null
   can_answer: boolean | null
   confident: boolean
+
   thresholds: {
     can_answer_min: number
     confident_min: number
   }
+
   latency_ms: number
   attempts: number
   error: string | null
@@ -117,9 +120,8 @@ export type CreateAnswerReportRequest = {
   report_type: AnswerReportType
 
   /*
-   * wrong_concept일 때만 값이 들어간다.
-   *
-   * 그 외 신고 유형은 []
+   * wrong_concept일 때만 선택값이 들어가고
+   * 그 외 신고 유형은 [] 전송
    */
   concept_details: ConceptDetail[]
 
@@ -161,7 +163,7 @@ export type SupplementInput = {
 }
 
 /* =========================
-   이론 블록 수정
+   이론 수정
 ========================= */
 
 export type BlockDetail = {
@@ -172,32 +174,33 @@ export type BlockDetail = {
   clean_text: string
 }
 
-export type BlockCorrectionStatus =
-  | 'proposed'
-  | 'applied'
-  | 'rejected'
-  | string
-
 export type BlockCorrection = {
   id: string
+
   block_id: string
+
   report_id: string | null
 
   base_clean_text: string
+
   base_clean_text_hash: string
 
   new_clean_text: string
 
   reason: string | null
 
-  status: BlockCorrectionStatus
+  status: string
 
   review_note: string | null
+
   reviewed_by: string | null
+
   applied_note: string | null
 
   created_at: string
+
   reviewed_at: string | null
+
   applied_at: string | null
 }
 
@@ -207,19 +210,42 @@ export type CreateBlockCorrectionRequest = {
   new_clean_text: string
 
   reason?: string
-
-  /*
-   * 이번 이론 수정 화면은
-   * 오류 신고와 독립적으로 사용하므로
-   * report_id는 보내지 않는다.
-   */
-  report_id?: string | number
 }
 
 export type ApproveBlockCorrectionRequest = {
   reviewed_by?: string
+
   review_note?: string
+
   resolve_report?: boolean
+}
+
+/* =========================
+   OCR
+========================= */
+
+export type OcrResponse = {
+  text: string
+
+  engine:
+    | 'google_vision'
+    | 'gemini'
+    | 'paddleocr'
+
+  model: string | null
+
+  problem_text: string
+
+  choices: string[]
+
+  figure_description: string
+
+  fallback_reason:
+    | 'vision_not_configured'
+    | 'vision_failed'
+    | 'llm_not_configured'
+    | 'llm_failed'
+    | null
 }
 
 /* =========================
@@ -229,12 +255,14 @@ export type ApproveBlockCorrectionRequest = {
 export class ApiError extends Error {}
 
 const QA_TIMEOUT_SECONDS =
-  Number(import.meta.env.VITE_QA_TIMEOUT_SECONDS) || 60
+  Number(
+    import.meta.env.VITE_QA_TIMEOUT_SECONDS,
+  ) || 60
 
-// /ocr 전용(Gemini 재시도 + PaddleOCR 첫 로드까지 기다림).
-// frontend/.env.example 참고
 const OCR_TIMEOUT_SECONDS =
-  Number(import.meta.env.VITE_OCR_TIMEOUT_SECONDS) || 330
+  Number(
+    import.meta.env.VITE_OCR_TIMEOUT_SECONDS,
+  ) || 330
 
 const CONNECTION_ERROR =
   '서버에 연결할 수 없습니다(백엔드 실행 확인)'
@@ -247,14 +275,16 @@ async function request<T>(
   init: RequestInit = {},
   timeoutSeconds?: number,
 ): Promise<T> {
-  const controller = new AbortController()
+  const controller =
+    new AbortController()
 
-  const timer = timeoutSeconds
-    ? setTimeout(
-        () => controller.abort(),
-        timeoutSeconds * 1000,
-      )
-    : undefined
+  const timer =
+    timeoutSeconds
+      ? setTimeout(
+          () => controller.abort(),
+          timeoutSeconds * 1000,
+        )
+      : undefined
 
   let res: Response
 
@@ -276,16 +306,23 @@ async function request<T>(
     clearTimeout(timer)
   }
 
-  const body = await res.text()
+  const body =
+    await res.text()
 
   let data: unknown = null
 
-  try {
-    data = body
-      ? JSON.parse(body)
-      : null
-  } catch {
-    data = null
+  let jsonParsed = false
+
+  if (body) {
+    try {
+      data =
+        JSON.parse(body)
+
+      jsonParsed =
+        true
+    } catch {
+      data = null
+    }
   }
 
   if (!res.ok) {
@@ -311,14 +348,31 @@ async function request<T>(
     )
   }
 
+  /*
+   * HTTP 200인데 JSON이 아닌 응답이면
+   * 정상 API 응답으로 처리하지 않는다.
+   *
+   * Vite proxy 누락으로 index.html이
+   * 반환되는 경우도 여기서 잡힌다.
+   */
+  if (
+    body &&
+    !jsonParsed
+  ) {
+    throw new ApiError(
+      '서버 응답 형식이 올바르지 않습니다.',
+    )
+  }
+
   return data as T
 }
 
 /* =========================
-   기존 API
+   기본 API
 ========================= */
 
-export function getSubjects(): Promise<string[]> {
+export function getSubjects():
+  Promise<string[]> {
   return request<string[]>(
     '/subjects',
   )
@@ -350,7 +404,8 @@ export function ask(
 ========================= */
 
 export function createAnswerReport(
-  payload: CreateAnswerReportRequest,
+  payload:
+    CreateAnswerReportRequest,
 ): Promise<CreateAnswerReportResponse> {
   return request<CreateAnswerReportResponse>(
     '/answer-reports',
@@ -390,11 +445,15 @@ export function createSupplement(
   ) {
     formData.append(
       'report_id',
-      String(input.reportId),
+      String(
+        input.reportId,
+      ),
     )
   }
 
-  if (input.queryLogId) {
+  if (
+    input.queryLogId
+  ) {
     formData.append(
       'query_log_id',
       input.queryLogId,
@@ -419,18 +478,15 @@ export function createSupplement(
     )
   }
 
-  if (input.file) {
+  if (
+    input.file
+  ) {
     formData.append(
       'file',
       input.file,
     )
   }
 
-  /*
-   * FormData를 보낼 때는
-   * Content-Type을 직접 지정하지 않는다.
-   * 브라우저가 boundary를 자동 설정한다.
-   */
   return request(
     '/supplements',
     {
@@ -448,12 +504,15 @@ export function getBlock(
   blockId: string,
 ): Promise<BlockDetail> {
   return request<BlockDetail>(
-    `/blocks/${encodeURIComponent(blockId)}`,
+    `/blocks/${encodeURIComponent(
+      blockId,
+    )}`,
   )
 }
 
 export function createBlockCorrection(
-  payload: CreateBlockCorrectionRequest,
+  payload:
+    CreateBlockCorrectionRequest,
 ): Promise<BlockCorrection> {
   return request<BlockCorrection>(
     '/block-corrections',
@@ -474,10 +533,14 @@ export function createBlockCorrection(
 
 export function approveBlockCorrection(
   correctionId: string,
-  payload: ApproveBlockCorrectionRequest = {},
+  payload:
+    ApproveBlockCorrectionRequest =
+      {},
 ): Promise<BlockCorrection> {
   return request<BlockCorrection>(
-    `/block-corrections/${encodeURIComponent(correctionId)}/approve`,
+    `/block-corrections/${encodeURIComponent(
+      correctionId,
+    )}/approve`,
     {
       method: 'POST',
 
@@ -494,37 +557,9 @@ export function approveBlockCorrection(
 }
 
 /* =========================
-   OCR
+   OCR API
 ========================= */
 
-export type OcrResponse = {
-  text: string
-
-  engine:
-    | 'google_vision'
-    | 'gemini'
-    | 'paddleocr'
-
-  model: string | null
-
-  problem_text: string
-
-  choices: string[]
-
-  figure_description: string
-
-  fallback_reason:
-    | 'vision_not_configured'
-    | 'vision_failed'
-    | 'llm_not_configured'
-    | 'llm_failed'
-    | null
-}
-
-// 문제 사진 → 문제 텍스트(POST /ocr).
-// Gemini(기본)·Google Vision,
-// 실패하면 PaddleOCR.
-// 그것도 실패하면 503.
 export function ocr(
   file: File,
 ): Promise<OcrResponse> {
