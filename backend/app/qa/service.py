@@ -12,6 +12,7 @@
 - LLM이 unanswerable=true로 답하면 "자료에서 확인 불가"(3구간 뒤 한 겹 더).
 - 인용 검증: cited와 본문의 [n] 중 넘긴 근거 번호(1..K) 밖인 것은 제거하고 metadata에 기록.
 - 모델(임베딩·리랭커·LLM)은 서버 시작 시 load_qa_models로 미리 올린다(지연 로딩 안 함).
+- 근거가 정해진 뒤 후처리로 이론 블록 근거에 연결된 그림·표 이미지(related_visuals)를 붙인다(D-JW-008, LLM 입력에는 안 넣음).
 """
 
 import logging
@@ -27,6 +28,7 @@ from app.judge import Judge, JudgeResult, get_judge
 from app.llm.gemini import GeminiClient, GeminiError
 from app.prompts import load_json, load_text, render
 from app.qa.mcq_check import check_mcq
+from app.qa.related_visuals import add_related_visuals
 from app.repositories.query_logs import insert_query_log
 from app.retrieval.rerank import LocalReranker, get_reranker, rerank
 from app.retrieval.search import TEAM_TEXT, candidate_sources, is_answerable, search_candidates
@@ -233,6 +235,10 @@ def answer_question(conn: psycopg.Connection, settings: Settings, models: QaMode
     cited = set(result.get("cited") or [])
     for e in evidence:
         e["cited"] = e["n"] in cited
+    # 4. 연결 그림·표(D-JW-008): 근거 K개를 한 번에 조회해 후처리로만 붙인다(실패해도 답변은 그대로)
+    t = time.perf_counter()
+    add_related_visuals(conn, settings, evidence)
+    timings["visuals_ms"] = _ms(t)
     result["evidence"] = [{k2: v for k2, v in e.items() if k2 != "clean_text"} for e in evidence]
     result["citations"] = [e for e in result["evidence"] if e["cited"]]
     timings["total_ms"] = _ms(t_start)
@@ -334,7 +340,8 @@ def _log(conn: psycopg.Connection, settings: Settings, r: dict) -> str | None:
         "evidence": [
             {"n": e["n"], "chunk_id": e["chunk_id"], "page": e["page"], "vector_score": e["vector_score"],
              "rerank_score": e["rerank_score"], "cited": e["cited"], "corpus": e["corpus"], "kind": e["kind"],
-             "block_id": e["block_id"], "title": e["title"]}
+             "block_id": e["block_id"], "title": e["title"],
+             "related_visual_ids": [v["block_id"] for v in e.get("related_visuals") or []]}
             for e in r["evidence"]
         ],
         "cited": r.get("cited") or [],

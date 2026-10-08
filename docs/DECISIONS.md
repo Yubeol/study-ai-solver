@@ -458,3 +458,14 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 승인 API에 인증이 없다(내부용). reviewed_by는 직접 입력한 이름이라 검증되지 않는다.
   - 길이 한도 2,000자는 1·2과목 기준. 3과목 적재 후 최대 길이가 1,300자를 넘으면 마이그레이션으로 다시 정한다.
 - 역할: 005·API는 재원, 적용(DB)은 민규. API는 PR #10(evidence에 block_id) 머지 후.
+
+## D-JW-008 /qa 근거에 연결된 그림·표 이미지(related_visuals)를 붙인다 (2026-10-08)
+- 배경: 완성선 "사진 문제 풀이(근거 + 그림·표 이미지)". 근거가 그림·표 블록이면 `thumbnail_url`·`image_url`이 이미 있지만(D-M-033), 근거가 이론이면 교재에서 그 이론과 함께 보는 그림·표가 화면에 안 나온다. 공통 JSON `block_relations`(D-M-032)에 이론 ↔ 그림·표 관계와 신뢰도가 있다. (D-JW-005의 공통 JSON 파일 직접 읽기·쪽 단위 방식은 쓰지 않고 DB·block_id 기준으로 다시 만들었다.)
+- 결정(민규 요청 사양):
+  - 최종 근거 K개가 정해진 뒤 후처리. `kind = theory`이고 `block_id`가 있는 근거마다 `mingyu_app.block_relations`에서 연결된 visual·table 블록을 찾는다. link_type `THEORY_TO_VISUAL` / `THEORY_TO_TABLE` / `VISUAL_TO_THEORY` / `TABLE_TO_THEORY`, 방향은 양쪽(from·to) 다 본다.
+  - 신뢰도 ≥ `RELATED_VISUAL_MIN_CONFIDENCE`(0.7), 근거당 최대 `RELATED_VISUAL_MAX`(3)개(신뢰도 높은 순, 같으면 block_id 순). 이미 evidence에 있는 블록, 이미지 키가 없거나 `ASSET_URL_TEMPLATE`이 비어 주소를 못 만드는 블록은 뺀다.
+  - `evidence[].related_visuals = [{block_id, kind, title, thumbnail_url, image_url}]`, 없으면 `[]`. URL은 `settings.asset_url(key)`(썸네일 없으면 원본, 원본 없으면 썸네일로 채움).
+  - DB 조회는 근거 K개의 block_id를 한 번에(쿼리 1번, `app/repositories/related_visuals.py`). 기존 응답 필드는 그대로 두고 추가만.
+  - `query_logs.metadata.evidence[].related_visual_ids`에 붙인 block_id를 남긴다. `timings_ms.visuals_ms` 추가.
+  - LLM 입력(근거 텍스트)에는 넣지 않는다(화면 표시용). 조회가 실패해도 답변은 막지 않고 경고 로그 + `[]`.
+- 한계: 관계는 공통 JSON이 있는 과목만(team_text 근거는 항상 `[]`). 3과목 적재 후 3과목 이미지도 같이 붙는다. `ASSET_URL_TEMPLATE` 값은 민규가 3과목 적재 때 확인해 알려 주기로 함.
