@@ -352,13 +352,14 @@ book 객체:
 수정 화면에 띄울 지금 내용.
 ```json
 {
-  "block_id": "S1:THEORY:TH_62_02", "block_type": "theory", "title": "가치 패러다임의 변화",
+  "block_id": "S1:THEORY:TH_62_02", "kind": "theory", "block_type": "theory", "title": "가치 패러다임의 변화",
+  "title_path": ["3장 …", "2. 빅데이터 회의론을 넘어 : 가치 패러다임의 변화"],
   "path": "3장 … > 2. 빅데이터 회의론을 넘어 : 가치 패러다임의 변화", "page": 62,
   "document_title": "…", "clean_text": "지금 본문", "editable": true,
   "active_correction_id": null, "updated_at": "2026-10-08T…"
 }
 ```
-`editable`: 이론 블록이고 원문 해시가 있으면 true. 없는 block_id면 404.
+`kind`는 `/qa` 근거의 `kind`와 같은 값(`block_type`과 같음), `path`는 `title_path`를 " > "로 이은 문자열. `editable`: 이론 블록이고 원문 해시가 있으면 true. 없는 block_id면 404.
 
 ### `POST /block-corrections` → 201
 ```json

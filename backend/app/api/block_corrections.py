@@ -52,8 +52,10 @@ class Approve(Review):
 def _block_view(b: dict, active: dict | None) -> dict:
     return {
         "block_id": b["block_id"],
+        "kind": b["block_type"],  # /qa evidence의 kind와 같은 값
         "block_type": b["block_type"],
         "title": b["title"],
+        "title_path": b["title_path"] or [],
         "path": TITLE_PATH_SEP.join(b["title_path"] or []) or b["title"],
         "page": b["printed_page_number"],
         "document_title": b["document_title"],

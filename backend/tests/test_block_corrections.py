@@ -106,6 +106,7 @@ def test_correction_flow(test_blocks, db_conn, settings):
 
         view = client.get(f"/blocks/{t.theory}").json()
         assert view["editable"] is True and view["clean_text"] == t.original and view["path"] == "3장 > 지니 지수"
+        assert view["kind"] == "theory" and view["title_path"] == ["3장", "지니 지수"] and view["block_id"] == t.theory
         assert client.get(f"/blocks/{t.table}").json()["editable"] is False
         assert client.get("/blocks/NOPE:THEORY:X").status_code == 404
 
