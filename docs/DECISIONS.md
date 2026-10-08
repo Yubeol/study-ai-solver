@@ -458,6 +458,12 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 승인 API에 인증이 없다(내부용). reviewed_by는 직접 입력한 이름이라 검증되지 않는다.
   - 길이 한도 2,000자는 1·2과목 기준. 3과목 적재 후 최대 길이가 1,300자를 넘으면 마이그레이션으로 다시 정한다.
 - 역할: 005·API는 재원, 적용(DB)은 민규. API는 PR #10(evidence에 block_id) 머지 후.
+- 구현(API, `feat/block-corrections-api`, 2026-10-08):
+  - `GET /blocks/{block_id}`(수정 화면용 지금 본문·editable), `POST /block-corrections`(proposed), `GET /block-corrections`, `POST /block-corrections/{id}/approve|reject|withdraw`, `PATCH /answer-reports/{id}`에 처리 칸.
+  - 승인: 임베딩은 트랜잭션 밖에서 먼저 계산(서버에 올라와 있는 임베딩 모델, `common_json.embedding_text(block_from_row(행), with_path=True)` — 리랭커가 embedding_text 칸을 읽으므로 clean_text·embedding과 같이 바꿈) → 트랜잭션 안에서 수정안·블록 행을 잠그고 원문 해시 재확인(다르거나 블록이 없으면 stale + 409) → 이전 approved/applied superseded → blocks의 clean_text·embedding_text·embedding_text_hash·embedding·embedding_model·updated_at 갱신 → applied. report_id가 있으면 신고 resolved(block_corrected).
+  - 바꾸지 않는 칸: `source_clean_text_hash`·`content_hash`·`raw_text`(JSON 원문 기준, 민규 요청).
+  - 신고 PATCH: resolved로 바꿀 때 resolution 필수(DB CHECK 위반 → 422). 기존 `{"status": "resolved"}`만 보내는 요청은 이제 422.
+  - 입력: new_clean_text가 공백·탭·줄바꿈뿐이면 400(민규 요청), 2,000자 초과는 422. 대상은 이론 블록만(표·그림 400).
 
 ## D-JW-008 /qa 근거에 연결된 그림·표 이미지(related_visuals)를 붙인다 (2026-10-08)
 - 배경: 완성선 "사진 문제 풀이(근거 + 그림·표 이미지)". 근거가 그림·표 블록이면 `thumbnail_url`·`image_url`이 이미 있지만(D-M-033), 근거가 이론이면 교재에서 그 이론과 함께 보는 그림·표가 화면에 안 나온다. 공통 JSON `block_relations`(D-M-032)에 이론 ↔ 그림·표 관계와 신뢰도가 있다. (D-JW-005의 공통 JSON 파일 직접 읽기·쪽 단위 방식은 쓰지 않고 DB·block_id 기준으로 다시 만들었다.)
