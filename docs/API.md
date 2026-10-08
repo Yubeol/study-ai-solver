@@ -24,7 +24,12 @@
 | POST | `/ocr` | 문제 사진 → 문제 텍스트(Gemini 기본, 실패 시 PaddleOCR) |
 | POST | `/answer-reports` | 답변 오류 신고 저장(근거 스냅샷 포함) |
 | GET | `/answer-reports?status=&limit=` | 오류 신고 목록(최신순) |
-| PATCH | `/answer-reports/{id}` | 신고 하나의 처리 상태 변경(open/resolved) |
+| PATCH | `/answer-reports/{id}` | 신고 처리: 상태(open/resolved)·처리 결과·메모·연결 블록 |
+| GET | `/blocks/{block_id}` | 블록의 지금 clean_text·수정 가능 여부(이론만 editable) |
+| POST | `/block-corrections` | 이론 블록 수정안 등록(proposed) |
+| GET | `/block-corrections?status=&block_id=&report_id=&limit=` | 수정안 목록(최신순) |
+| POST | `/block-corrections/{id}/approve` | 승인 = 블록 clean_text 수정 + 재임베딩(바로 검색 반영) |
+| POST | `/block-corrections/{id}/reject`, `/withdraw` | 반려 / 철회(블록 그대로) |
 | POST | `/supplements` | 보충 이론 등록(텍스트/이미지/PDF) → 검토 대기, 임베딩 안 함 |
 | GET | `/supplements?status=&limit=` | 보충 이론 목록(검토 대기는 `pending_review`) |
 
@@ -257,9 +262,14 @@ book 객체:
 
 ### `PATCH /answer-reports/{id}`
 ```json
-{"status": "resolved"}
+{"status": "resolved", "resolution": "block_corrected", "resolution_note": "이론 수정함", "linked_block_ids": ["S1:THEORY:TH_62_02"], "reviewed_by": "재원"}
 ```
-신고 하나의 상태만 바꿉니다. `resolved`면 `resolved_at`이 채워지고 `open`으로 되돌리면 null. 없는 id면 404.
+- 보낸 값만 바꿉니다(모두 선택, 하나 이상).
+- `resolution`(처리 결과): `block_corrected`(이론 수정) / `supplement_added`(보충 이론) / `source_fix_requested`(표·시각자료 → JSON 수정 요청) / `prompt_issue` / `retrieval_issue` / `not_an_error` / `duplicate` / `other`.
+- **`resolved`로 바꿀 때 `resolution`이 필요합니다**(없으면 422). `resolved`면 `resolved_at`이 채워지고 `open`으로 되돌리면 null.
+- `linked_block_ids`: 근거가 기존 교재 청크(team_text)일 때 검토자가 대응 블록을 연결. 최대 20개.
+- 응답: 신고 1건(`resolution`, `resolution_note`, `linked_block_ids`, `reviewed_by` 포함). 없는 id면 404.
+- 이론 수정 승인(`/block-corrections/{id}/approve`)은 `report_id`가 있으면 신고를 자동으로 닫습니다.
 
 ## 보충 이론
 
@@ -333,3 +343,54 @@ book 객체:
 | 413 | `PROBLEM_OCR_MAX_UPLOAD_MB` 초과 |
 | 422 | `file` 없음 |
 | 503 | 대체 경로 PaddleOCR까지 실패(모델 파일 없음 등). `detail`: "사진에서 문제를 읽지 못했습니다. 문제를 직접 입력해 주세요." |
+
+## 이론 수정 (오류 신고 처리)
+
+대상: 공통 JSON **이론 블록**(`block_type = theory`)의 `clean_text`만(D-JW-007, 005). 블록은 `/qa` 근거의 `block_id`(예: `S1:THEORY:TH_62_02`)로 가리킵니다. 표·시각자료는 400 → 신고를 `resolution: source_fix_requested`로 닫습니다(데이터 담당 JSON 수정 요청).
+
+### `GET /blocks/{block_id}`
+수정 화면에 띄울 지금 내용.
+```json
+{
+  "block_id": "S1:THEORY:TH_62_02", "block_type": "theory", "title": "가치 패러다임의 변화",
+  "path": "3장 … > 2. 빅데이터 회의론을 넘어 : 가치 패러다임의 변화", "page": 62,
+  "document_title": "…", "clean_text": "지금 본문", "editable": true,
+  "active_correction_id": null, "updated_at": "2026-10-08T…"
+}
+```
+`editable`: 이론 블록이고 원문 해시가 있으면 true. 없는 block_id면 404.
+
+### `POST /block-corrections` → 201
+```json
+{"block_id": "S1:THEORY:TH_62_02", "new_clean_text": "고친 본문(1~2,000자)", "reason": "설명 보충", "report_id": "신고 id(선택)"}
+```
+응답: 수정안 1건(`status: "proposed"`). 블록은 아직 바뀌지 않습니다.
+```json
+{
+  "id": "uuid", "block_id": "S1:THEORY:TH_62_02", "report_id": "uuid 또는 null",
+  "base_clean_text": "등록 당시 본문", "base_clean_text_hash": "JSON 원문 해시", "new_clean_text": "고친 본문",
+  "reason": "설명 보충", "status": "proposed", "review_note": "", "reviewed_by": null, "applied_note": null,
+  "created_at": "…", "reviewed_at": null, "applied_at": null
+}
+```
+오류: 400(공백·탭·줄바꿈뿐 / 이론 블록 아님 / 지금 내용과 같음 / 원문 해시 없음), 404(블록 없음), 422(2,000자 초과·없는 report_id). 앞뒤 공백은 지우고 저장합니다.
+
+### `POST /block-corrections/{id}/approve`
+```json
+{"reviewed_by": "재원", "review_note": "확인", "resolve_report": true}
+```
+- 한 트랜잭션에서 블록 `clean_text`, `embedding_text`(적재와 같은 `common_json.embedding_text(block_from_row(행), with_path=True)`, 리랭커가 읽는 칸), `embedding`(그 텍스트로 계산)을 같이 바꿉니다(`embedding_text_hash`·`embedding_model`도 갱신). 다음 질문부터 검색·근거에 반영됩니다.
+- 같은 블록에 이미 적용된 수정이 있으면 그 수정은 `superseded`가 됩니다(블록당 적용 중인 수정 1개).
+- `report_id`가 있고 `resolve_report`가 true(기본)면 그 신고를 `resolved` + `resolution: block_corrected`로 닫습니다.
+- 응답: 수정안(`status: "applied"`, `applied_at` 채움).
+- 오류: 404(없음), 409(proposed가 아님 / 수정안 등록 뒤 교재 원문이 바뀜 → 수정안은 `stale`, 새로 등록), 503(서버에 임베딩 모델 없음).
+- `blocks.source_clean_text_hash`·`raw_text`는 바꾸지 않습니다(JSON 원문 기준, 재적재 비교용). 공통 JSON을 다시 적재하면 원문으로 덮어써집니다(수정 기록은 남음).
+
+### `POST /block-corrections/{id}/reject`, `POST /block-corrections/{id}/withdraw`
+```json
+{"reviewed_by": "재원", "review_note": "근거 없음"}
+```
+`proposed`만 가능(아니면 409). 블록은 그대로.
+
+### `GET /block-corrections?status=proposed&block_id=&report_id=&limit=50`
+최신순. `status`: proposed / applied / rejected / withdrawn / stale / superseded (approved는 후속 적재 단계용).
