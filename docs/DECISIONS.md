@@ -457,6 +457,7 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 적재 코드(common_json_load)가 JSON 원문으로 upsert하므로, 재적재하면 적용된 수정이 덮어써진다. 수정 기록(block_corrections)은 남으므로 후속 단계에서 적재 코드가 applied 수정을 다시 적용하고, 원문 해시가 다르면 stale로 바꾼다.
   - 승인 API에 인증이 없다(내부용). reviewed_by는 직접 입력한 이름이라 검증되지 않는다.
   - 길이 한도 2,000자는 1·2과목 기준. 3과목 적재 후 최대 길이가 1,300자를 넘으면 마이그레이션으로 다시 정한다.
+  - 길이 한도 재검토(2026-10-08): 3과목 적재 후 이론 clean_text 최대가 1,563자라 위 재검토 조건(1,300자 초과)에 해당한다. 지금 한도 2,000자 안이라 동작에는 문제가 없다(가장 긴 블록도 437자 여유). 기준(최대의 1.5배 ≈ 2,345자)대로면 3,000자가 맞으므로, 마감 뒤 다음 개선에서 다음 마이그레이션(CHECK 변경) + API 상수(`MAX_CLEAN_TEXT`) + 테스트·문서를 한 PR로 바꾼다. 마이그레이션과 API는 같이 들어가야 한다(API만 먼저 바뀌면 2,001자 이상에서 DB CHECK 위반).
 - 역할: 005·API는 재원, 적용(DB)은 민규. API는 PR #10(evidence에 block_id) 머지 후.
 - 구현(API, `feat/block-corrections-api`, 2026-10-08):
   - `GET /blocks/{block_id}`(수정 화면용 지금 본문·editable), `POST /block-corrections`(proposed), `GET /block-corrections`, `POST /block-corrections/{id}/approve|reject|withdraw`, `PATCH /answer-reports/{id}`에 처리 칸.
