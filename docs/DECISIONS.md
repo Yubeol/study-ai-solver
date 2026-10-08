@@ -438,3 +438,23 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
   - 프론트 대기 시간: `VITE_OCR_TIMEOUT_SECONDS`(기본 330초)를 /qa와 따로 둔다. 서버 최악 경로 = Gemini 4번 시도(60초×4 + 대기 2+4+8초, `GEMINI_MAX_RETRIES`=3) + PaddleOCR 첫 로드(약 60초) ≈ 314초. `PROBLEM_EXTRACT_MODEL=strong`이면 strong→lite 폴백까지 시도해 약 2배로 늘어난다.
   - 남은 것: /ocr 전용 재시도 횟수(`PROBLEM_OCR_MAX_RETRIES`)는 다음 PR. 화면(QuestionForm)의 OCR 중 입력 막기·기존 입력 보호는 수지 담당.
 - 확인 2026-10-06: 요청·응답 형식 https://docs.cloud.google.com/vision/docs/ocr , 인증("API key or OAuth token") https://docs.cloud.google.com/vision/docs/request , 가격(기능별 월 1,000단위 무료, 이후 1,000단위당 $1.50, **무료 구간도 결제 계정 필요**) https://cloud.google.com/vision/pricing .
+
+## D-JW-007 오류 신고 처리 기록과 이론 블록 수정안(block_corrections) — 005 마이그레이션 (2026-10-07)
+- 배경: 강사 요구 "틀린 이론 수정". 오류 신고(D-JW-004)를 받기만 하고 처리 결과와 교재 원문 수정 경로가 없었다. 검색 대상이 공통 JSON 블록(`mingyu_app.blocks`, D-M-032)으로 옮겨 가므로 수정 대상도 blocks로 하고, 재적재해도 안 바뀌는 `block_id`로 가리킨다(민규 협의).
+- 범위(1차): 이론 블록(`block_type = theory`)의 `clean_text`만. `raw_text`·표·시각자료는 고치지 않는다(표·시각자료는 `table_data`·`visual_data`에 내용이 있어 clean_text 수정으로 못 고침 → 데이터 담당 JSON 수정 요청 `source_fix_requested`로 닫음).
+- 005 변경(`mingyu_app`만, 팀 규격 테이블 변경 없음):
+  - `blocks.source_clean_text_hash`: JSON 원문 clean_text 해시. 005에서 SQL로 채움(지금은 적용된 수정이 없어 DB clean_text = JSON 원문). clean_text가 NULL이면 NULL.
+  - 해시 규칙(기준 함수 `app/core/text_hash.py` `clean_text_hash`): CRLF·CR → LF → 앞뒤 스페이스·탭·LF만 제거 → UTF-8 sha256 hex. Python `strip()`은 모든 유니코드 공백을, PostgreSQL `btrim()`은 기본으로 스페이스만 지워서 지울 문자를 `" \t\n"`으로 명시했다. SQL 식과 Python 값이 같은지, 백필 값이 맞는지 `tests/test_text_hash.py`로 묶었다.
+  - `answer_reports`: `resolution`(block_corrected / supplement_added / source_fix_requested / prompt_issue / retrieval_issue / not_an_error / duplicate / other), `resolution_note`(500자), `linked_block_ids`(team_text 근거 신고를 대응 block_id에 연결), `reviewed_by`(100자). `status`는 open/resolved 그대로, resolved면 resolution 필수.
+  - `block_corrections`: block_id(FK 없음 — 블록이 JSON에서 빠져도 적재를 막지 않게), report_id(FK, SET NULL), base_clean_text(작성 당시 DB clean_text, 비교 화면용), base_clean_text_hash(작성 당시 `source_clean_text_hash` 복사 — DB clean_text 해시가 아님), new_clean_text(1~2,000자, 공백만 거부), reason, status, review_note, reviewed_by, applied_note, created_at·reviewed_at·applied_at. 블록당 approved/applied는 1개(부분 유니크).
+  - 길이 한도 근거(2026-10-07 조회, 2026-10-08 민규 확인): 1·2과목 이론 311개(1과목 138 / 2과목 173) 기준 clean_text 최대 694자(1과목, 2과목 최대 664자), 99% 586자. 1.5배(1,041자)에 3과목 적재 여유를 두어 2,000자.
+- 흐름(마감 축소판, 민규 요청): 승인하면 API가 바로 블록 clean_text를 고치고 재임베딩한다(`common_json.embedding_text` 그대로).
+  - 승인 시 API는 `clean_text`·`embedding`만 고치고 `blocks.source_clean_text_hash`는 바꾸지 않는다(JSON 원문 기준 해시로 유지, 재적재 때 원문이 바뀌었는지 비교하는 기준).
+  - proposed → (승인) applied / (반려) rejected / (철회) withdrawn
+  - applied → 같은 블록의 새 수정 적용 시 superseded(같은 트랜잭션에서 먼저 처리)
+  - approved·stale은 적재 코드가 승인된 수정을 다시 적용하는 후속 단계용으로 CHECK에만 둔다.
+- 알려진 한계:
+  - 적재 코드(common_json_load)가 JSON 원문으로 upsert하므로, 재적재하면 적용된 수정이 덮어써진다. 수정 기록(block_corrections)은 남으므로 후속 단계에서 적재 코드가 applied 수정을 다시 적용하고, 원문 해시가 다르면 stale로 바꾼다.
+  - 승인 API에 인증이 없다(내부용). reviewed_by는 직접 입력한 이름이라 검증되지 않는다.
+  - 길이 한도 2,000자는 1·2과목 기준. 3과목 적재 후 최대 길이가 1,300자를 넘으면 마이그레이션으로 다시 정한다.
+- 역할: 005·API는 재원, 적용(DB)은 민규. API는 PR #10(evidence에 block_id) 머지 후.
