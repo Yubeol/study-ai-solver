@@ -10,13 +10,11 @@ import {
   type Evidence,
 } from '../api'
 
-type EvidenceCardProps = {
-  e: Evidence
-}
-
 function EvidenceCard({
   e,
-}: EvidenceCardProps) {
+}: {
+  e: Evidence
+}) {
   const [
     editing,
     setEditing,
@@ -35,7 +33,10 @@ function EvidenceCard({
   const [
     block,
     setBlock,
-  ] = useState<BlockDetail | null>(null)
+  ] =
+    useState<BlockDetail | null>(
+      null,
+    )
 
   const [
     newCleanText,
@@ -45,16 +46,24 @@ function EvidenceCard({
   const [
     correctionError,
     setCorrectionError,
-  ] = useState<string | null>(null)
+  ] =
+    useState<string | null>(
+      null,
+    )
 
   const [
     correctionSuccess,
     setCorrectionSuccess,
-  ] = useState<string | null>(null)
+  ] =
+    useState<string | null>(
+      null,
+    )
 
   const canEditTheory =
     e.kind === 'theory' &&
-    Boolean(e.block_id)
+    Boolean(
+      e.block_id,
+    )
 
   const openEditor =
     async () => {
@@ -68,20 +77,45 @@ function EvidenceCard({
 
       if (editing) {
         setEditing(false)
-        setCorrectionError(null)
+
+        setCorrectionError(
+          null,
+        )
 
         return
       }
 
-      setLoadingBlock(true)
-      setCorrectionError(null)
-      setCorrectionSuccess(null)
+      setLoadingBlock(
+        true,
+      )
+
+      setCorrectionError(
+        null,
+      )
+
+      setCorrectionSuccess(
+        null,
+      )
 
       try {
         const currentBlock =
           await getBlock(
             e.block_id,
           )
+
+        /*
+         * 예상하지 못한 null 응답이 와도
+         * 화면 전체가 죽지 않도록 방어.
+         */
+        if (
+          !currentBlock
+        ) {
+          setCorrectionError(
+            '이론 정보를 불러오지 못했습니다.',
+          )
+
+          return
+        }
 
         if (
           currentBlock.kind !==
@@ -99,10 +133,13 @@ function EvidenceCard({
         )
 
         setNewCleanText(
-          currentBlock.clean_text,
+          currentBlock.clean_text ??
+            '',
         )
 
-        setEditing(true)
+        setEditing(
+          true,
+        )
       } catch (error) {
         setCorrectionError(
           error instanceof Error
@@ -110,7 +147,9 @@ function EvidenceCard({
             : '현재 이론 내용을 불러오지 못했습니다.',
         )
       } finally {
-        setLoadingBlock(false)
+        setLoadingBlock(
+          false,
+        )
       }
     }
 
@@ -126,7 +165,9 @@ function EvidenceCard({
       const nextText =
         newCleanText.trim()
 
-      if (!nextText) {
+      if (
+        !nextText
+      ) {
         setCorrectionError(
           '수정할 내용을 입력해주세요.',
         )
@@ -145,39 +186,48 @@ function EvidenceCard({
         return
       }
 
-      setApplying(true)
-      setCorrectionError(null)
-      setCorrectionSuccess(null)
+      setApplying(
+        true,
+      )
+
+      setCorrectionError(
+        null,
+      )
+
+      setCorrectionSuccess(
+        null,
+      )
 
       try {
-        /*
-         * 1. 수정안 등록
-         *
-         * 이번 화면은 신고 없이 독립적으로 사용하므로
-         * report_id는 보내지 않는다.
-         */
         const correction =
-          await createBlockCorrection({
-            block_id:
-              block.block_id,
+          await createBlockCorrection(
+            {
+              block_id:
+                block.block_id,
 
-            new_clean_text:
-              nextText,
-          })
+              new_clean_text:
+                nextText,
+            },
+          )
 
-        /*
-         * 2. 방금 생성된 수정안을
-         * 바로 승인해서 실제 교재에 적용한다.
-         *
-         * 승인 body의 모든 필드는 선택값이므로
-         * 최소 형태인 {}로 호출한다.
-         */
+        if (
+          !correction ||
+          !correction.id
+        ) {
+          setCorrectionError(
+            '수정안 등록 결과를 확인할 수 없습니다.',
+          )
+
+          return
+        }
+
         await approveBlockCorrection(
           correction.id,
         )
 
         setBlock({
           ...block,
+
           clean_text:
             nextText,
         })
@@ -196,7 +246,9 @@ function EvidenceCard({
             : '이론 수정에 실패했습니다.',
         )
       } finally {
-        setApplying(false)
+        setApplying(
+          false,
+        )
       }
     }
 
@@ -211,8 +263,14 @@ function EvidenceCard({
             <span className="ev-n">
               [{e.n}]
             </span>{' '}
-            {e.book_title} ·{' '}
-            {e.page ?? '?'}쪽
+
+            {e.book_title}
+
+            {' · '}
+
+            {e.page ?? '?'}
+
+            쪽
 
             {e.path && (
               <div className="ev-path">
@@ -249,126 +307,141 @@ function EvidenceCard({
 
       {correctionError && (
         <div className="theory-correction-message error">
-          {correctionError}
+          {
+            correctionError
+          }
         </div>
       )}
 
       {correctionSuccess && (
         <div className="theory-correction-message success">
-          {correctionSuccess}
+          {
+            correctionSuccess
+          }
         </div>
       )}
 
-      {editing && block && (
-        <section className="theory-correction">
-          <div className="theory-correction-heading">
-            <div>
-              <strong>
-                이론 수정
-              </strong>
-
-              <p>
-                현재 정제된 이론 내용을
-                수정할 수 있습니다.
-              </p>
-            </div>
-          </div>
-
-          {(block.title ||
-            block.title_path) && (
-            <div className="theory-block-info">
-              {block.title && (
+      {editing &&
+        block && (
+          <section className="theory-correction">
+            <div className="theory-correction-heading">
+              <div>
                 <strong>
-                  {block.title}
+                  이론 수정
                 </strong>
-              )}
 
-              {block.title_path && (
-                <span>
-                  {block.title_path}
-                </span>
-              )}
+                <p>
+                  현재 정제된 이론 내용을
+                  수정할 수 있습니다.
+                </p>
+              </div>
             </div>
-          )}
 
-          <label className="theory-correction-input">
-            <span>
-              수정할 내용
-            </span>
+            {(block.title ||
+              block.title_path) && (
+              <div className="theory-block-info">
+                {block.title && (
+                  <strong>
+                    {
+                      block.title
+                    }
+                  </strong>
+                )}
 
-            <textarea
-              value={
-                newCleanText
-              }
-              maxLength={2000}
-              disabled={
-                applying
-              }
-              onChange={(event) => {
-                setNewCleanText(
-                  event.target.value,
-                )
+                {block.title_path && (
+                  <span>
+                    {
+                      block.title_path
+                    }
+                  </span>
+                )}
+              </div>
+            )}
 
-                setCorrectionError(
-                  null,
-                )
+            <label className="theory-correction-input">
+              <span>
+                수정할 내용
+              </span>
 
-                setCorrectionSuccess(
-                  null,
-                )
-              }}
-            />
+              <textarea
+                value={
+                  newCleanText
+                }
+                maxLength={
+                  2000
+                }
+                disabled={
+                  applying
+                }
+                onChange={(
+                  event,
+                ) => {
+                  setNewCleanText(
+                    event.target.value,
+                  )
 
-            <small>
-              {newCleanText.length}
-              /2000
-            </small>
-          </label>
+                  setCorrectionError(
+                    null,
+                  )
 
-          <div className="theory-correction-actions">
-            <button
-              type="button"
-              className="cancel-button"
-              disabled={
-                applying
-              }
-              onClick={() => {
-                setEditing(false)
-                setCorrectionError(
-                  null,
-                )
-              }}
-            >
-              취소
-            </button>
+                  setCorrectionSuccess(
+                    null,
+                  )
+                }}
+              />
 
-            <button
-              type="button"
-              className="primary-button"
-              disabled={
-                applying ||
-                !newCleanText.trim() ||
-                newCleanText.trim() ===
-                  block.clean_text.trim()
-              }
-              onClick={
-                applyCorrection
-              }
-            >
-              {applying
-                ? '수정 적용 중...'
-                : '수정 적용'}
-            </button>
-          </div>
-        </section>
-      )}
+              <small>
+                {
+                  newCleanText.length
+                }
+                /2000
+              </small>
+            </label>
+
+            <div className="theory-correction-actions">
+              <button
+                type="button"
+                className="cancel-button"
+                disabled={
+                  applying
+                }
+                onClick={() => {
+                  setEditing(
+                    false,
+                  )
+
+                  setCorrectionError(
+                    null,
+                  )
+                }}
+              >
+                취소
+              </button>
+
+              <button
+                type="button"
+                className="primary-button"
+                disabled={
+                  applying ||
+                  !newCleanText.trim() ||
+                  newCleanText.trim() ===
+                    block.clean_text.trim()
+                }
+                onClick={
+                  applyCorrection
+                }
+              >
+                {applying
+                  ? '수정 적용 중...'
+                  : '수정 적용'}
+              </button>
+            </div>
+          </section>
+        )}
     </article>
   )
 }
 
-// 인용된 근거는 펼쳐 보여 주고,
-// 인용되지 않은 근거는 접어 둔다.
-// raw_text는 교재 원문 그대로다.
 export default function CitationList({
   evidence,
 }: {
@@ -385,7 +458,8 @@ export default function CitationList({
     )
 
   if (
-    evidence.length === 0
+    evidence.length ===
+    0
   ) {
     return null
   }
@@ -396,7 +470,8 @@ export default function CitationList({
         근거 (교재 원문)
       </h2>
 
-      {cited.length === 0 && (
+      {cited.length ===
+        0 && (
         <p className="hint">
           답변이 인용한 근거가 없습니다.
         </p>
@@ -411,11 +486,15 @@ export default function CitationList({
         ),
       )}
 
-      {others.length > 0 && (
+      {others.length >
+        0 && (
         <details>
           <summary>
             인용되지 않은 근거{' '}
-            {others.length}개
+            {
+              others.length
+            }
+            개
           </summary>
 
           {others.map(
