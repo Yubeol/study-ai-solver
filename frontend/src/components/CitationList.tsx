@@ -12,15 +12,23 @@ import {
 } from '../api'
 
 type EvidenceImageProps = {
-  title: string
-  thumbnailUrl?: string | null
-  imageUrl?: string | null
+  thumbnailUrl:
+    | string
+    | null
+    | undefined
+
+  imageUrl:
+    | string
+    | null
+    | undefined
+
+  alt: string
 }
 
 function EvidenceImage({
-  title,
   thumbnailUrl,
   imageUrl,
+  alt,
 }: EvidenceImageProps) {
   const [
     imageError,
@@ -42,36 +50,31 @@ function EvidenceImage({
   if (imageError) {
     return (
       <div className="evidence-image-error">
-        이미지를 불러올 수 없어요.
+        이미지를 불러올 수
+        없어요.
       </div>
     )
   }
-
-  const openOriginal =
-    () => {
-      if (!originalUrl) {
-        return
-      }
-
-      window.open(
-        originalUrl,
-        '_blank',
-        'noopener,noreferrer',
-      )
-    }
 
   return (
     <button
       type="button"
       className="evidence-image-button"
-      onClick={
-        openOriginal
-      }
-      aria-label={`${title} 원본 이미지 열기`}
+      onClick={() => {
+        if (
+          originalUrl
+        ) {
+          window.open(
+            originalUrl,
+            '_blank',
+            'noopener,noreferrer',
+          )
+        }
+      }}
     >
       <img
         src={previewUrl}
-        alt={title}
+        alt={alt}
         className="evidence-image"
         onError={() =>
           setImageError(
@@ -88,32 +91,35 @@ function RelatedVisualCard({
 }: {
   visual: RelatedVisual
 }) {
-  const title =
-    visual.title ||
-    '관련 이미지'
+  const label =
+    visual.kind ===
+    'table'
+      ? '표'
+      : '그림'
 
   return (
     <div className="related-visual-card">
       <EvidenceImage
-        title={title}
         thumbnailUrl={
           visual.thumbnail_url
         }
         imageUrl={
           visual.image_url
         }
+        alt={
+          visual.title ||
+          '관련 이미지'
+        }
       />
 
       <div className="related-visual-info">
         <span className="related-visual-kind">
-          {visual.kind ===
-          'table'
-            ? '표'
-            : '그림'}
+          {label}
         </span>
 
         <span className="related-visual-title">
-          {title}
+          {visual.title ||
+            '관련 이미지'}
         </span>
       </div>
     </div>
@@ -178,7 +184,7 @@ function EvidenceCard({
   const hasOwnImage =
     Boolean(
       e.thumbnail_url ||
-      e.image_url,
+        e.image_url,
     )
 
   const relatedVisuals =
@@ -198,10 +204,6 @@ function EvidenceCard({
       if (editing) {
         setEditing(false)
 
-        setCorrectionError(
-          null,
-        )
-
         return
       }
 
@@ -218,39 +220,32 @@ function EvidenceCard({
       )
 
       try {
-        const currentBlock =
+        const detail =
           await getBlock(
             e.block_id,
           )
 
-        if (
-          !currentBlock
-        ) {
-          setCorrectionError(
+        if (!detail) {
+          throw new Error(
             '이론 정보를 불러오지 못했습니다.',
           )
-
-          return
         }
 
         if (
-          currentBlock.kind !==
+          detail.kind !==
           'theory'
         ) {
-          setCorrectionError(
+          throw new Error(
             '이론 블록만 수정할 수 있습니다.',
           )
-
-          return
         }
 
         setBlock(
-          currentBlock,
+          detail,
         )
 
         setNewCleanText(
-          currentBlock.clean_text ??
-            '',
+          detail.clean_text,
         )
 
         setEditing(
@@ -261,7 +256,7 @@ function EvidenceCard({
           error instanceof
             Error
             ? error.message
-            : '현재 이론 내용을 불러오지 못했습니다.',
+            : '이론 정보를 불러오지 못했습니다.',
         )
       } finally {
         setLoadingBlock(
@@ -284,7 +279,7 @@ function EvidenceCard({
 
       if (!nextText) {
         setCorrectionError(
-          '수정할 내용을 입력해주세요.',
+          '수정할 이론 내용을 입력해주세요.',
         )
 
         return
@@ -295,15 +290,13 @@ function EvidenceCard({
         block.clean_text.trim()
       ) {
         setCorrectionError(
-          '현재 내용과 수정안이 같습니다.',
+          '수정된 내용이 없습니다.',
         )
 
         return
       }
 
-      setApplying(
-        true,
-      )
+      setApplying(true)
 
       setCorrectionError(
         null,
@@ -329,20 +322,19 @@ function EvidenceCard({
           !correction ||
           !correction.id
         ) {
-          setCorrectionError(
-            '수정안 등록 결과를 확인할 수 없습니다.',
+          throw new Error(
+            '수정안을 등록하지 못했습니다.',
           )
-
-          return
         }
 
         await approveBlockCorrection(
-          correction.id,
+          String(
+            correction.id,
+          ),
         )
 
         setBlock({
           ...block,
-
           clean_text:
             nextText,
         })
@@ -354,12 +346,14 @@ function EvidenceCard({
         setCorrectionSuccess(
           '수정이 적용되었습니다. 다음 질문부터 반영돼요.',
         )
+
+        setEditing(false)
       } catch (error) {
         setCorrectionError(
           error instanceof
             Error
             ? error.message
-            : '이론 수정에 실패했습니다.',
+            : '이론 수정 중 오류가 발생했습니다.',
         )
       } finally {
         setApplying(
@@ -368,53 +362,42 @@ function EvidenceCard({
       }
     }
 
+  const sourceLabel =
+    e.kind ===
+    'supplement'
+      ? '사용자 보충'
+      : e.book_title
+
+  const pageLabel =
+    e.kind !==
+      'supplement' &&
+    e.page !== null &&
+    e.page !==
+      undefined &&
+    String(e.page)
+      .trim() !== ''
+      ? ` · ${e.page}쪽`
+      : ''
+
   return (
     <article
       className="evidence"
       id={`ev-${e.n}`}
     >
       <header>
-        <div className="evidence-header-main">
-          <div>
-            <span className="ev-n">
-              [{e.n}]
-            </span>{' '}
+        <span className="ev-n">
+          [{e.n}]
+        </span>{' '}
+        {sourceLabel}
+        {pageLabel}
 
-            {e.book_title}
-
-            {' · '}
-
-            {e.page ?? '?'}
-
-            쪽
-
-            {e.path && (
-              <div className="ev-path">
-                {e.path}
-              </div>
-            )}
-          </div>
-
-          {canEditTheory && (
-            <button
-              type="button"
-              className="theory-edit-button"
-              disabled={
-                loadingBlock ||
-                applying
-              }
-              onClick={
-                openEditor
-              }
-            >
-              {loadingBlock
-                ? '불러오는 중...'
-                : editing
-                  ? '수정 닫기'
-                  : '이론 수정'}
-            </button>
+        {e.kind !==
+          'supplement' &&
+          e.path && (
+            <div className="ev-path">
+              {e.path}
+            </div>
           )}
-        </div>
       </header>
 
       <pre className="raw-text">
@@ -422,40 +405,40 @@ function EvidenceCard({
       </pre>
 
       {hasOwnImage && (
-        <div className="evidence-visual-section">
+        <section className="evidence-visual-section">
           <div className="evidence-visual-label">
             근거 이미지
           </div>
 
           <EvidenceImage
-            title={
-              e.path ||
-              e.book_title ||
-              '근거 이미지'
-            }
             thumbnailUrl={
               e.thumbnail_url
             }
             imageUrl={
               e.image_url
             }
+            alt="근거 이미지"
           />
-        </div>
+        </section>
       )}
 
       {relatedVisuals.length >
         0 && (
-        <div className="related-visuals-section">
+        <section className="related-visuals-section">
           <div className="evidence-visual-label">
             관련 그림·표
           </div>
 
           <div className="related-visuals-list">
             {relatedVisuals.map(
-              (visual) => (
+              (
+                visual,
+                index,
+              ) => (
                 <RelatedVisualCard
                   key={
-                    visual.block_id
+                    visual.block_id ||
+                    index
                   }
                   visual={
                     visual
@@ -464,66 +447,37 @@ function EvidenceCard({
               ),
             )}
           </div>
-        </div>
+        </section>
       )}
 
-      {correctionError && (
-        <div className="theory-correction-message error">
-          {
-            correctionError
-          }
-        </div>
-      )}
-
-      {correctionSuccess && (
-        <div className="theory-correction-message success">
-          {
-            correctionSuccess
-          }
+      {canEditTheory && (
+        <div className="theory-correction-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={
+              loadingBlock ||
+              applying
+            }
+            onClick={() => {
+              void openEditor()
+            }}
+          >
+            {loadingBlock
+              ? '불러오는 중…'
+              : editing
+                ? '수정 닫기'
+                : '이론 수정'}
+          </button>
         </div>
       )}
 
       {editing &&
         block && (
-          <section className="theory-correction">
-            <div className="theory-correction-heading">
-              <div>
-                <strong>
-                  이론 수정
-                </strong>
-
-                <p>
-                  현재 정제된 이론
-                  내용을 수정할 수
-                  있습니다.
-                </p>
-              </div>
-            </div>
-
-            {(block.title ||
-              block.title_path) && (
-              <div className="theory-block-info">
-                {block.title && (
-                  <strong>
-                    {
-                      block.title
-                    }
-                  </strong>
-                )}
-
-                {block.title_path && (
-                  <span>
-                    {
-                      block.title_path
-                    }
-                  </span>
-                )}
-              </div>
-            )}
-
-            <label className="theory-correction-input">
+          <div className="theory-correction-editor">
+            <label>
               <span>
-                수정할 내용
+                이론 내용
               </span>
 
               <textarea
@@ -538,71 +492,55 @@ function EvidenceCard({
                 }
                 onChange={(
                   event,
-                ) => {
+                ) =>
                   setNewCleanText(
                     event
                       .target
                       .value,
                   )
-
-                  setCorrectionError(
-                    null,
-                  )
-
-                  setCorrectionSuccess(
-                    null,
-                  )
-                }}
+                }
               />
+            </label>
 
+            <div className="theory-correction-footer">
               <small>
                 {
                   newCleanText.length
                 }
                 /2000
               </small>
-            </label>
-
-            <div className="theory-correction-actions">
-              <button
-                type="button"
-                className="cancel-button"
-                disabled={
-                  applying
-                }
-                onClick={() => {
-                  setEditing(
-                    false,
-                  )
-
-                  setCorrectionError(
-                    null,
-                  )
-                }}
-              >
-                취소
-              </button>
 
               <button
                 type="button"
                 className="primary-button"
                 disabled={
-                  applying ||
-                  !newCleanText.trim() ||
-                  newCleanText.trim() ===
-                    block.clean_text.trim()
+                  applying
                 }
-                onClick={
-                  applyCorrection
-                }
+                onClick={() => {
+                  void applyCorrection()
+                }}
               >
                 {applying
-                  ? '수정 적용 중...'
+                  ? '적용 중…'
                   : '수정 적용'}
               </button>
             </div>
-          </section>
+          </div>
         )}
+
+      {correctionError && (
+        <div className="notice error">
+          {correctionError}
+        </div>
+      )}
+
+      {correctionSuccess && (
+        <div className="notice success">
+          {
+            correctionSuccess
+          }
+        </div>
+      )}
     </article>
   )
 }
@@ -623,8 +561,7 @@ export default function CitationList({
     )
 
   if (
-    evidence.length ===
-    0
+    evidence.length === 0
   ) {
     return null
   }
@@ -657,10 +594,7 @@ export default function CitationList({
         <details>
           <summary>
             인용되지 않은 근거{' '}
-            {
-              others.length
-            }
-            개
+            {others.length}개
           </summary>
 
           {others.map(

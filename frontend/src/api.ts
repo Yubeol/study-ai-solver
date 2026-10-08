@@ -43,6 +43,7 @@ export type Evidence = {
     | 'theory'
     | 'table'
     | 'visual'
+    | 'supplement'
     | string
     | null
 
@@ -181,10 +182,6 @@ export type CreateAnswerReportRequest = {
 
   report_type: AnswerReportType
 
-  /*
-   * wrong_concept일 때만 선택값이 들어가고
-   * 다른 신고 유형에서는 []를 보낸다.
-   */
   concept_details: ConceptDetail[]
 
   detail?: string
@@ -222,6 +219,12 @@ export type SupplementInput = {
   text?: string
 
   file?: File | null
+}
+
+export type SupplementResponse = {
+  id?: number | string
+
+  searchable: boolean
 }
 
 /* =========================
@@ -406,9 +409,6 @@ async function request<T>(
     }
   }
 
-  /*
-   * HTTP 오류 응답
-   */
   if (!res.ok) {
     if (
       data === null &&
@@ -433,13 +433,6 @@ async function request<T>(
     )
   }
 
-  /*
-   * API가 성공 응답(200)을 줬는데
-   * JSON이 아닌 HTML 등이 돌아온 경우.
-   *
-   * Vite proxy 누락으로 index.html이
-   * 반환되는 경우도 여기서 잡는다.
-   */
   if (
     body &&
     !jsonParsed
@@ -517,7 +510,7 @@ export function createAnswerReport(
 
 export function createSupplement(
   input: SupplementInput,
-): Promise<unknown> {
+): Promise<SupplementResponse> {
   const formData =
     new FormData()
 
@@ -576,7 +569,7 @@ export function createSupplement(
     )
   }
 
-  return request(
+  return request<SupplementResponse>(
     '/supplements',
     {
       method: 'POST',
