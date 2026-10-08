@@ -416,6 +416,29 @@ PyCharm이 루트에 uv 프로젝트를 생성해 그대로 사용. torch 계열
 - 알려진 위험: "학습정리" 요약 블록이 본문보다 앞에 오는 경우가 있다. a05는 TH_43_02(학습정리)가 1위가 되어 정답 쪽이 1위→4위, answer→gray. a04도 학습정리 TH_40_01이 1위였지만 정답 쪽이라 hit. 기출 p50-2도 1위가 TH_50_01(학습정리). (a08은 학습정리가 8위, 1위는 VIS_59_01로 정답 쪽.) 학습목표처럼 검색에서 뺄지는 평가 재실행이 필요해 이번에는 보류.
 - 기준값(0.45 / 0.03 / 0.15)·Jev(0.5 / 0.8)는 바꾸지 않았다.
 
+## D-JW-001 문제 사진 OCR API는 프론트 화면 흐름에 맞추고 기존 PaddleOCR을 재사용한다 (2026-10-06)
+- 배경: 프론트 UI PR(`feat/frontend-ui`)의 문제 사진 입력(`QuestionForm`)은 사진 → "추출된 문제" 칸 채우기 → 사용자가 고침 → `/qa` 흐름이고, OCR API가 없어 미리보기까지만 되어 있다.
+- 결정: `POST /ocr`은 문제 사진을 저장하지 않고 텍스트만 돌려준다. 사용자가 텍스트를 고친 뒤 `/qa`로 보내므로, 비전 LLM으로 바로 푸는 `/qa/image` 대신 업로드 경로의 인쇄체 PaddleOCR 엔진을 재사용한다(추가 API 비용·모델 없음, DB 사용 없음).
+- 줄 순서: 세로 중심 기준 위→아래, 같은 높이(앞 줄 높이의 절반 이내)는 왼→오른으로 공백 연결.
+
+## D-JW-002 문제 사진 추출은 Gemini 비전을 기본으로, PaddleOCR은 대체 경로로 (2026-10-06, D-JW-001 일부 변경)
+- 배경: 실제 휴대폰 사진(기울어짐·페이지 휨·뒷장 비침·위아래에 다른 문제)으로 `/ocr`(PaddleOCR)을 시험하니 문제 문장과 ①② 보기를 놓치고, 비친 글자("통H허호…")와 아래 문제 문장을 섞어 읽었다. 이대로 `/qa`에 넣으면 질문 자체가 바뀐다(예: "옳은 것" → "옳지 않은 것").
+- 결정: `/ocr`은 Gemini 비전 구조화 출력(`found`, `problem_text`, `choices`, `figure_description`)으로 가장 온전한 문제 1개만 옮겨 적게 한다. 모델은 `PROBLEM_EXTRACT_MODEL`(기본 lite), 프롬프트는 `backend/app/prompts/problem_extract_*`. 키가 없거나 호출이 실패하면 기존 PaddleOCR로 읽고 `fallback_reason`을 남긴다. PaddleOCR 엔진 설정(`ingestion/ocr.py`)은 교재 업로드와 공유하므로 바꾸지 않는다.
+- 이미지 입력: `GeminiClient.generate_json(..., images=[(바이트, MIME)])` → user 텍스트 파트 뒤에 `inlineData {mimeType, data(base64)}` 파트. 확인 2026-10-06: https://ai.google.dev/api/caching#Part (Part.inlineData / Blob), 요청 전체 20MB 이하·텍스트 다음에 이미지 권장 https://ai.google.dev/gemini-api/docs/image-understanding .
+- 비용·한도: 사진 1장당 Gemini 호출 1회(무료 한도 공유). DB는 쓰지 않는다.
+
+## D-JW-003 문제 사진 OCR에 Google Cloud Vision 엔진을 추가한다(기본은 gemini) (2026-10-06, 2026-10-07 기본값 변경)
+- 배경: 재원 결정으로 문제 사진 글자 인식은 Google Cloud Vision을 쓴다. Gemini 방식(D-JW-002)은 지우지 않고 `PROBLEM_OCR_ENGINE=gemini`로 고를 수 있게 둔다.
+- 결정: `PROBLEM_OCR_ENGINE`(기본 `gemini`, `google_vision`은 키가 있을 때 선택). Vision은 REST `POST https://vision.googleapis.com/v1/images:annotate`에 `DOCUMENT_TEXT_DETECTION` + `languageHints`(`GOOGLE_VISION_LANGUAGE_HINTS`, 기본 ko)로 보내고 `fullTextAnnotation.text`를 그대로 돌려준다. 키(`GOOGLE_VISION_API_KEY`)는 `x-goog-api-key` 헤더로만 보낸다. 키가 없거나 실패하면 PaddleOCR로 대신 읽는다.
+- 기본값 변경(2026-10-07, PR 전): 처음에는 기본을 `google_vision`으로 했으나 `gemini`로 되돌린다. 팀원 모두 답변용 `GEMINI_API_KEY`가 있고 Vision 키(결제 계정 필요)는 없어서, 기본이 Vision이면 `.env.example`을 복사한 팀원은 매번 PaddleOCR 대체 경로(인식 품질 낮음)로만 돈다. 실제 문제 사진(지니 지수 31번)에서 Gemini가 문제·선택지·그림 설명을 정확히 옮긴 것도 확인했다. Vision은 키를 넣고 `PROBLEM_OCR_ENGINE=google_vision`으로 고른다.
+- 한계: Vision은 사진의 글자를 모두 읽으므로 위아래에 걸린 다른 문제·비친 뒷장 글자가 섞일 수 있다. 문제 1개만 골라내기·선택지 나누기는 하지 않고 사용자가 입력칸에서 고친다.
+- 리뷰 반영(민규, PR #8, 2026-10-07):
+  - 크기: /ocr만 `PROBLEM_OCR_MAX_UPLOAD_MB`(기본 12). Gemini 인라인 요청은 20MB까지라 base64(약 1.33배)를 붙이면 15MB쯤부터 400이 난다. `OCR_*`는 PaddleOCR 설정 접두어라 `PROBLEM_OCR_*`로 맞췄다.
+  - PaddleOCR까지 실패(모델 파일 없음 등)하면 500 대신 503 + "문제를 직접 입력해 주세요".
+  - 프론트 대기 시간: `VITE_OCR_TIMEOUT_SECONDS`(기본 330초)를 /qa와 따로 둔다. 서버 최악 경로 = Gemini 4번 시도(60초×4 + 대기 2+4+8초, `GEMINI_MAX_RETRIES`=3) + PaddleOCR 첫 로드(약 60초) ≈ 314초. `PROBLEM_EXTRACT_MODEL=strong`이면 strong→lite 폴백까지 시도해 약 2배로 늘어난다.
+  - 남은 것: /ocr 전용 재시도 횟수(`PROBLEM_OCR_MAX_RETRIES`)는 다음 PR. 화면(QuestionForm)의 OCR 중 입력 막기·기존 입력 보호는 수지 담당.
+- 확인 2026-10-06: 요청·응답 형식 https://docs.cloud.google.com/vision/docs/ocr , 인증("API key or OAuth token") https://docs.cloud.google.com/vision/docs/request , 가격(기능별 월 1,000단위 무료, 이후 1,000단위당 $1.50, **무료 구간도 결제 계정 필요**) https://cloud.google.com/vision/pricing .
+
 ## D-JW-007 오류 신고 처리 기록과 이론 블록 수정안(block_corrections) — 005 마이그레이션 (2026-10-07)
 - 배경: 강사 요구 "틀린 이론 수정". 오류 신고(D-JW-004)를 받기만 하고 처리 결과와 교재 원문 수정 경로가 없었다. 검색 대상이 공통 JSON 블록(`mingyu_app.blocks`, D-M-032)으로 옮겨 가므로 수정 대상도 blocks로 하고, 재적재해도 안 바뀌는 `block_id`로 가리킨다(민규 협의).
 - 범위(1차): 이론 블록(`block_type = theory`)의 `clean_text`만. `raw_text`·표·시각자료는 고치지 않는다(표·시각자료는 `table_data`·`visual_data`에 내용이 있어 clean_text 수정으로 못 고침 → 데이터 담당 JSON 수정 요청 `source_fix_requested`로 닫음).
