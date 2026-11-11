@@ -149,6 +149,7 @@ book 객체:
   "low_confidence": false,
   "low_confidence_reasons": [],
   "mcq_check": null,
+  "computed": false,
   "cited": [1],
   "llm": {"model": "…", "usage": {}, "failed_attempts": [], "citation_check": {}},
   "llm_unanswerable": false,
@@ -217,6 +218,7 @@ book 객체:
   `{provider, question_key: "can_answer", input, model, probability, can_answer, confident, thresholds: {can_answer_min, confident_min}, latency_ms, usage, attempts, error}`. `can_answer=false`면 Gemini를 부르지 않고 `unanswerable`.
 - `mcq_check`(객관식으로 보이는 질문에 답한 경우만, 아니면 null):
   `{is_mcq: true, negative, chosen, option_verdicts: {"1": "적절하다" | "적절하지 않다" | "확인되지 않는다" | "알 수 없음", …}, consistent, reasons: ["사람이 읽는 문장"]}`
+- `computed`: 답변 프롬프트 규칙 9(계산 문제)로 근거의 공식에 질문 수치를 대입해 계산한 답이면 true(기록·확인용, 확신 낮음 표시는 하지 않음). 해설(`explanation`)에 공식[n]·대입식·결과가 나옵니다.
 - `llm`·`llm_unanswerable`·`cited`는 개발 확인용입니다. reject 구간이면 `llm`은 null.
 - `query_log_id`: 팀 규격 `query_logs`(`DB_SCHEMA`, 지금 `mingyu.query_logs`)에 남긴 행 id(기록 실패 시 null). `retrieved_theory_ids` 컬럼에는 `team_text` 근거(theory_chunks id)만 들어가고, 블록 근거는 `metadata.retrieved_block_ids`와 `metadata.evidence[].block_id`에, 사용자 보충 근거는 `metadata.retrieved_supplement_ids`(supplements.id 목록)에 남습니다. `metadata`에는 `corpus`·`candidate_sources`도 있습니다.
 

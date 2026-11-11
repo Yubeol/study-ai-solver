@@ -23,6 +23,10 @@
         "type": "integer"
       },
       "description": "답에 실제로 사용한 근거 번호 목록. unanswerable이면 빈 배열"
+    },
+    "computed": {
+      "type": "boolean",
+      "description": "규칙 9로 근거의 공식에 질문의 수치를 대입해 계산한 답이면 true(계산 결과는 근거에 직접 없음). 아니면 false"
     }
   },
   "required": [
@@ -30,6 +34,7 @@
     "answer",
     "explanation",
     "confusions",
-    "cited"
+    "cited",
+    "computed"
   ]
 }
